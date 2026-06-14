@@ -51,6 +51,21 @@ Everything except the initial moderator question and the final report streams to
 view (activity bar): the points, which group owns which point, the parallel/sequential ordering,
 per-group progress, and interim conclusions.
 
+## Two functions, one panel
+
+The activity-bar **ModelLane-BrainStrom** container holds **two views side by side**, and you
+click between them:
+
+- **ModelLane: Local LLM Chat** — ModelLane's original capability: chat with your local model
+  (LM Studio / Ollama / vLLM / llama.cpp) right in the panel — streaming replies, an **Agent**
+  toggle, and one-click code insertion. The same chat also opens as a full editor tab via
+  **ModelLane: Open Chat (Editor)**.
+- **Brainstorm: Live Board** — the multi-LLM moderated debate board described above.
+
+Each view's title bar has a button to jump to the other, so the two functions are always one
+click apart. Local models also appear in VS Code's built-in **Chat model picker** (ModelLane's
+language-model provider), next to the synthetic **🧠 Brainstorm Debate Model**.
+
 ## Architecture (in one breath)
 
 A **single TypeScript VS Code extension** owns everything — UX, secrets, lifecycle, *and* the
@@ -82,7 +97,7 @@ governance docs were authored for the original sidecar design; the runtime is no
 From the packaged `.vsix`:
 
 ```powershell
-code --install-extension ".\modellane-brainstrom-ts-0.3.0.vsix" --force
+code --install-extension ".\modellane-brainstrom-ts-0.3.1.vsix" --force
 ```
 
 Then **Developer: Reload Window**. (Build the `.vsix` yourself with the [Development](#development) steps.)

@@ -1,22 +1,19 @@
 import * as vscode from 'vscode';
 import { LMStudioApi } from './lmStudioApi';
-import { AgentRunner } from './agentRunner';
+import { ChatSession } from './chatSession';
 
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
   private readonly _panel: vscode.WebviewPanel;
-  private readonly _api: LMStudioApi;
-  private readonly _agent: AgentRunner;
+  private readonly _session: ChatSession;
   private _disposables: vscode.Disposable[] = [];
-  private _history: { role: 'system' | 'user' | 'assistant'; content: string }[] = [];
 
   private constructor(panel: vscode.WebviewPanel, api: LMStudioApi) {
     this._panel = panel;
-    this._api = api;
-    this._agent = new AgentRunner(api);
+    this._session = new ChatSession(api, (m) => this._panel.webview.postMessage(m));
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
-    this._panel.webview.onDidReceiveMessage(this._handleMessage.bind(this), null, this._disposables);
-    this._panel.webview.html = this._getHtml();
+    this._panel.webview.onDidReceiveMessage((m) => this._session.handleMessage(m), null, this._disposables);
+    this._panel.webview.html = ChatPanel.getHtml(this._panel.webview.cspSource, getNonce());
   }
 
   static createOrShow(api: LMStudioApi) {
@@ -34,91 +31,7 @@ export class ChatPanel {
     ChatPanel.currentPanel = new ChatPanel(panel, api);
   }
 
-  private async _handleMessage(msg: unknown) {
-    if (!isWebviewMessage(msg)) return;
-
-    switch (msg.type) {
-      case 'sendMessage':
-        if (typeof msg.text === 'string') await this._handleSend(msg.text, msg.agentMode === true);
-        break;
-      case 'cancelRequest':
-        this._api.cancelRequest();
-        break;
-      case 'insertCode':
-        if (typeof msg.code === 'string') await this._insertCode(msg.code);
-        break;
-      case 'newChat':
-        this._history = [];
-        this._postMessage({ type: 'clearChat' });
-        break;
-    }
-  }
-
-  private async _handleSend(text: string, agentMode: boolean) {
-    this._history.push({ role: 'user', content: text });
-    this._postMessage({ type: 'addMessage', role: 'user', content: text });
-    this._postMessage({ type: 'showThinking' });
-    try {
-      const fullContent = agentMode
-        ? await this._runAgent(text)
-        : await this._runChatStream();
-      this._postMessage({ type: 'hideThinking' });
-      this._history.push({ role: 'assistant', content: fullContent });
-    } catch (err: any) {
-      this._postMessage({ type: 'hideThinking' });
-      this._postMessage({ type: 'addMessage', role: 'assistant', content: `**Error:** ${err.message}` });
-    }
-  }
-
-  private async _runChatStream(): Promise<string> {
-    let fullContent = '';
-    for await (const chunk of this._api.chatStream(this._history)) {
-      if (chunk.done) break;
-      fullContent += chunk.content;
-      this._postMessage({ type: 'streamContent', content: fullContent });
-    }
-    return fullContent;
-  }
-
-  private async _runAgent(text: string): Promise<string> {
-    let fullContent = 'Agent mode\n';
-    this._postMessage({ type: 'streamContent', content: fullContent });
-
-    const priorConversation = this._history.slice(0, -1);
-    for await (const update of this._agent.run(text, priorConversation)) {
-      if (update.type === 'status') {
-        fullContent += `\n- ${update.content}`;
-      } else {
-        fullContent += `\n\n${update.content}`;
-      }
-      this._postMessage({ type: 'streamContent', content: fullContent });
-    }
-
-    return fullContent;
-  }
-
-  private async _insertCode(code: string) {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) return;
-
-    const picked = await vscode.window.showWarningMessage(
-      'Insert generated code into the active editor?',
-      { modal: true },
-      'Insert'
-    );
-    if (picked === 'Insert') {
-      await editor.edit(eb => eb.replace(editor.selection, code));
-    }
-  }
-
-  private _postMessage(msg: any) {
-    this._panel.webview.postMessage(msg);
-  }
-
-  private _getHtml(): string {
-    const nonce = getNonce();
-    const cspSource = this._panel.webview.cspSource;
-
+  static getHtml(cspSource: string, nonce: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -328,14 +241,7 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
   }
 }
 
-function isWebviewMessage(value: unknown): value is { type: string; text?: unknown; code?: unknown; agentMode?: unknown } {
-  return typeof value === 'object' &&
-    value !== null &&
-    'type' in value &&
-    typeof (value as { type?: unknown }).type === 'string';
-}
-
-function getNonce(): string {
+export function getNonce(): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let nonce = '';
   for (let i = 0; i < 32; i++) {

@@ -2,7 +2,7 @@
   "name": "modellane-brainstrom-ts",
   "displayName": "ModelLane-BrainStrom (TS)",
   "description": "Pure-TypeScript multi-LLM moderated brainstorming / critical / heuristic / game-theoretic debates in VS Code — end-to-end typed, in-process async engine (no Python sidecar)",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "modellane",
   "author": "Tocvic M",
   "license": "GPL-3.0-or-later",
@@ -26,8 +26,10 @@
     "onCommand:lmstudio.refreshLanguageModels",
     "onCommand:lmstudio.senseLocalModels",
     "onView:brainstrom.board",
+    "onView:modellane.chat",
     "onCommand:brainstrom.openBoard",
-    "onCommand:brainstrom.configure"
+    "onCommand:brainstrom.configure",
+    "onCommand:modellane.focusChat"
   ],
   "main": "./out/extension.js",
   "capabilities": {
@@ -40,7 +42,8 @@
     "commands": [
       {
         "command": "lmstudio.chat",
-        "title": "ModelLane: Open Chat"
+        "title": "ModelLane: Open Chat (Editor)",
+        "icon": "$(window)"
       },
       {
         "command": "lmstudio.explainCode",
@@ -84,17 +87,26 @@
       },
       {
         "command": "brainstrom.openBoard",
-        "title": "BrainStrom: Open Live Board"
+        "title": "BrainStrom: Open Live Board",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "brainstrom.configure",
         "title": "BrainStrom: Configure",
         "icon": "$(gear)"
+      },
+      {
+        "command": "modellane.focusChat",
+        "title": "ModelLane: Focus Local LLM Chat",
+        "icon": "$(comment)"
       }
     ],
     "menus": {
       "view/title": [
-        { "command": "brainstrom.configure", "when": "view == brainstrom.board", "group": "navigation" }
+        { "command": "modellane.focusChat", "when": "view == brainstrom.board", "group": "navigation@1" },
+        { "command": "brainstrom.configure", "when": "view == brainstrom.board", "group": "navigation@2" },
+        { "command": "brainstrom.openBoard", "when": "view == modellane.chat", "group": "navigation@1" },
+        { "command": "lmstudio.chat", "when": "view == modellane.chat", "group": "navigation@2" }
       ],
       "editor/context": [
         {
@@ -118,7 +130,8 @@
         { "command": "lmstudio.refreshLanguageModels" },
         { "command": "lmstudio.senseLocalModels" },
         { "command": "brainstrom.openBoard" },
-        { "command": "brainstrom.configure" }
+        { "command": "brainstrom.configure" },
+        { "command": "modellane.focusChat" }
       ]
     },
     "languageModelChatProviders": [
@@ -131,17 +144,22 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "brainstrom",
-          "title": "BrainStrom",
+          "id": "modellane-brainstrom",
+          "title": "ModelLane-BrainStrom",
           "icon": "media/brain.svg"
         }
       ]
     },
     "views": {
-      "brainstrom": [
+      "modellane-brainstrom": [
+        {
+          "id": "modellane.chat",
+          "name": "ModelLane: Local LLM Chat",
+          "type": "webview"
+        },
         {
           "id": "brainstrom.board",
-          "name": "Live Board",
+          "name": "Brainstorm: Live Board",
           "type": "webview"
         }
       ]

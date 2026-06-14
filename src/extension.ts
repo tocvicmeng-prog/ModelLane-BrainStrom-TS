@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { LMStudioApi } from './lmStudioApi';
 import { ChatPanel } from './chatPanel';
+import { ModelLaneChatViewProvider } from './modelLaneChatView';
 import { registerCodeActions } from './codeActions';
 import { registerInlineCompletion } from './inlineCompletion';
 import { registerStatusBar } from './statusBar';
@@ -55,10 +56,17 @@ export function activate(context: vscode.ExtensionContext) {
     controller.run(messages, progress, cancelToken));
   guard('BrainStrom view', () => context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(BrainstormViewProvider.viewType, board)));
+  // ModelLane's original local-LLM chat, surfaced as a sidebar view IN PARALLEL with the
+  // Brainstorm board (same activity-bar container) so the user can click between the two
+  // functions. Same engine/UI as the ModelLane editor panel (ChatPanel), shared via ChatSession.
+  const chatView = new ModelLaneChatViewProvider(api);
+  guard('ModelLane chat view', () => context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(ModelLaneChatViewProvider.viewType, chatView)));
   guard('LM provider', () => context.subscriptions.push(
     vscode.lm.registerLanguageModelChatProvider('modellane-brainstrom', modelLaneProvider)));
   reg('brainstrom.openBoard', () => vscode.commands.executeCommand('brainstrom.board.focus'));
   reg('brainstrom.configure', () => adminConsole.open());
+  reg('modellane.focusChat', () => vscode.commands.executeCommand('modellane.chat.focus'));
 
   // --- inherited ModelLane features (all guarded so a co-installed ModelLane cannot
   // abort our activation on a duplicate command id) ---
