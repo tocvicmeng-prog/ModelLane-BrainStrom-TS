@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output (compiled from src/ via `npm run compile`)
+out/
+
+# Packaged extension (attached to GitHub Releases, not committed)
+*.vsix
+*.tgz
+
+# Runtime cache (engine embeddings cache, generated at run/test time)
+data/
+
+# Tooling / OS
+.vscode-test/
+*.log
+.DS_Store
+Thumbs.db

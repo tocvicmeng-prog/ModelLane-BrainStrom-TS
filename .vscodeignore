@@ -1,0 +1,20 @@
+# Pure-TS build: ship out/**/*.js + media + manifest only.
+.vscode/**
+.vscode-test/**
+src/**
+node_modules/**
+**/*.ts
+**/*.map
+out/test/**
+*.tgz
+*.vsix
+.gitignore
+.npmignore
+tsconfig.json
+package-lock.json
+
+# dev docs / caches / data (not part of the shipped extension)
+docs/**
+handover/**
+data/**
+.git/**

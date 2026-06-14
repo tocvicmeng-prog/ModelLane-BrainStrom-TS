@@ -1,0 +1,277 @@
+{
+  "name": "modellane-brainstrom-ts",
+  "displayName": "ModelLane-BrainStrom (TS)",
+  "description": "Pure-TypeScript multi-LLM moderated brainstorming / critical / heuristic / game-theoretic debates in VS Code — end-to-end typed, in-process async engine (no Python sidecar)",
+  "version": "0.3.0",
+  "publisher": "modellane",
+  "author": "Tocvic M",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tocvicmeng-prog/ModelLane.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tocvicmeng-prog/ModelLane/issues"
+  },
+  "homepage": "https://github.com/tocvicmeng-prog/ModelLane#readme",
+  "engines": { "vscode": "^1.104.0" },
+  "categories": ["Chat", "Programming Languages", "Machine Learning"],
+  "keywords": ["lmstudio", "ollama", "vllm", "llama.cpp", "llamafile", "ai", "code agent", "local", "llm"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:lmstudio.chat",
+    "onCommand:lmstudio.selectModel",
+    "onCommand:lmstudio.showStatus",
+    "onCommand:lmstudio.diagnostics",
+    "onCommand:lmstudio.refreshLanguageModels",
+    "onCommand:lmstudio.senseLocalModels",
+    "onView:brainstrom.board",
+    "onCommand:brainstrom.openBoard",
+    "onCommand:brainstrom.configure"
+  ],
+  "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Chat and code actions can send selected text to configured local model APIs. Inline completion and agent file tools are disabled in untrusted workspaces."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "lmstudio.chat",
+        "title": "ModelLane: Open Chat"
+      },
+      {
+        "command": "lmstudio.explainCode",
+        "title": "ModelLane: Explain Selected Code"
+      },
+      {
+        "command": "lmstudio.refactorCode",
+        "title": "ModelLane: Refactor Selected Code"
+      },
+      {
+        "command": "lmstudio.reviewCode",
+        "title": "ModelLane: Review Selected Code"
+      },
+      {
+        "command": "lmstudio.generateTests",
+        "title": "ModelLane: Generate Tests for Selected Code"
+      },
+      {
+        "command": "lmstudio.askAboutCode",
+        "title": "ModelLane: Ask About Selected Code"
+      },
+      {
+        "command": "lmstudio.selectModel",
+        "title": "ModelLane: Select LM Studio Model"
+      },
+      {
+        "command": "lmstudio.showStatus",
+        "title": "ModelLane: Refresh Status Bar"
+      },
+      {
+        "command": "lmstudio.diagnostics",
+        "title": "ModelLane: Diagnostics"
+      },
+      {
+        "command": "lmstudio.refreshLanguageModels",
+        "title": "ModelLane: Refresh Built-in Chat Models"
+      },
+      {
+        "command": "lmstudio.senseLocalModels",
+        "title": "ModelLane: Sense and Refresh Installed Models"
+      },
+      {
+        "command": "brainstrom.openBoard",
+        "title": "BrainStrom: Open Live Board"
+      },
+      {
+        "command": "brainstrom.configure",
+        "title": "BrainStrom: Configure",
+        "icon": "$(gear)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "brainstrom.configure", "when": "view == brainstrom.board", "group": "navigation" }
+      ],
+      "editor/context": [
+        {
+          "submenu": "lmstudio.editorContext",
+          "group": "lmstudio",
+          "when": "config.lmstudio.enableContextMenu"
+        }
+      ],
+      "lmstudio.editorContext": [
+        { "command": "lmstudio.explainCode", "group": "lmstudio@1" },
+        { "command": "lmstudio.refactorCode", "group": "lmstudio@2" },
+        { "command": "lmstudio.reviewCode", "group": "lmstudio@3" },
+        { "command": "lmstudio.generateTests", "group": "lmstudio@4" },
+        { "command": "lmstudio.askAboutCode", "group": "lmstudio@5" }
+      ],
+      "commandPalette": [
+        { "command": "lmstudio.chat" },
+        { "command": "lmstudio.selectModel" },
+        { "command": "lmstudio.showStatus" },
+        { "command": "lmstudio.diagnostics" },
+        { "command": "lmstudio.refreshLanguageModels" },
+        { "command": "lmstudio.senseLocalModels" },
+        { "command": "brainstrom.openBoard" },
+        { "command": "brainstrom.configure" }
+      ]
+    },
+    "languageModelChatProviders": [
+      {
+        "vendor": "modellane-brainstrom",
+        "displayName": "ModelLane-BrainStrom",
+        "managementCommand": "lmstudio.senseLocalModels"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "brainstrom",
+          "title": "BrainStrom",
+          "icon": "media/brain.svg"
+        }
+      ]
+    },
+    "views": {
+      "brainstrom": [
+        {
+          "id": "brainstrom.board",
+          "name": "Live Board",
+          "type": "webview"
+        }
+      ]
+    },
+    "submenus": [
+      {
+        "id": "lmstudio.editorContext",
+        "label": "ModelLane"
+      }
+    ],
+    "keybindings": [
+      { "command": "lmstudio.chat", "key": "ctrl+shift+l", "mac": "cmd+shift+l" }
+    ],
+    "configuration": {
+      "title": "ModelLane",
+      "properties": {
+        "lmstudio.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:1234",
+          "scope": "machine-overridable",
+          "restricted": true,
+          "description": "LM Studio API base URL"
+        },
+        "lmstudio.apiMode": {
+          "type": "string",
+          "enum": ["native", "openai"],
+          "enumDescriptions": [
+            "Use LM Studio's native /api/v1 models and chat endpoints.",
+            "Use OpenAI-compatible /v1/models and /v1/chat/completions endpoints."
+          ],
+          "default": "native",
+          "description": "API endpoint family to use when talking to LM Studio"
+        },
+        "lmstudio.allowRemoteBaseUrl": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "restricted": true,
+          "description": "Allow sending prompts and code context to non-local LM Studio API hosts. Enable only for endpoints you trust."
+        },
+        "lmstudio.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model ID to use (leave empty to auto-detect)"
+        },
+        "lmstudio.maxTokens": {
+          "type": "integer",
+          "default": 4096,
+          "minimum": 128,
+          "maximum": 32768,
+          "description": "Maximum tokens per response"
+        },
+        "lmstudio.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Model temperature"
+        },
+        "lmstudio.enableInlineCompletion": {
+          "type": "boolean",
+          "default": false,
+          "restricted": true,
+          "description": "Enable inline code completion. When enabled, recent code around the cursor is sent to the configured LM Studio API."
+        },
+        "lmstudio.agent.maxIterations": {
+          "type": "integer",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Maximum number of tool-use steps the chat agent may take for one request"
+        },
+        "lmstudio.enableContextMenu": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable context menu items"
+        },
+        "localModels.ollamaBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "scope": "machine-overridable",
+          "restricted": true,
+          "description": "Ollama API base URL used for VS Code's built-in chat model picker"
+        },
+        "localModels.vllmBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "scope": "machine-overridable",
+          "restricted": true,
+          "description": "vLLM OpenAI-compatible API base URL used for VS Code's built-in chat model picker"
+        },
+        "localModels.llamaCppBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "scope": "machine-overridable",
+          "restricted": true,
+          "description": "llama.cpp OpenAI-compatible API base URL used for VS Code's built-in chat model picker"
+        },
+        "localModels.llamafileBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "scope": "machine-overridable",
+          "restricted": true,
+          "description": "Llamafile OpenAI-compatible API base URL used for VS Code's built-in chat model picker"
+        },
+        "brainstrom.allowRemote": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "restricted": true,
+          "description": "Allow BrainStrom to reach non-local (remote) model endpoints (OpenAI / Anthropic APIs). Off by default; only enable for endpoints you trust."
+        },
+        "brainstrom.autoConfirmPlan": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run a brainstorm in a single turn (decompose + debate immediately). When false (default), BrainStrom proposes the decomposition plan first and waits for you to reply 'go' before debating (CONFIRM_PLAN)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "tsc -p ./tsconfig.json",
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -watch -p ./tsconfig.json",
+    "pretest": "tsc -p ./tsconfig.json",
+    "test": "node --test \"out/test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.5.0"
+  }
+}
