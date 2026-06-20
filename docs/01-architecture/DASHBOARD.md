@@ -1,6 +1,19 @@
 # ModelLane-BrainStrom (TS) — Project Dashboard (Supervision Document)
 
-**Version: v0.3 · Date: 2026-06-15 · Status: DELIVERED (pure-TypeScript in-process port; in-editor runtime acceptance pending)**
+**Version: v0.5 · Date: 2026-06-20 · Status: DELIVERED + AUDIT-HARDENED (pure-TypeScript in-process port; in-editor runtime acceptance pending)**
+
+> **v0.5 — audit remediation (2026-06-20).** A 3rd-party architecture/security audit raised 11
+> findings; all are addressed. **P0/P1:** F1 research now routes through a guarded fetch restricted
+> to a research-host allowlist (was raw `httpFetch`); F2 the CLI runs each call in a throwaway,
+> auto-deleted temp cwd when `allowFileTools` is off; F3 the embeddings cache defaults to in-memory
+> and threads an absolute `globalStorageUri/embeddings` path (never a relative `./data`); F4 a
+> `package-lock.json` is committed (`npm audit` clean); F5 adds a manual `docs/ACCEPTANCE.md`
+> checklist + an automated `acceptance.test.ts`. **P2/P3:** F6 secrets snapshot cleared in a
+> `finally`; F7 the live board is now structured (plan → group cards → status); F8 admin config is
+> schema-validated before persist; F9 the egress guard adds a DNS resolve-and-recheck
+> (DNS-rebinding); F10 package metadata points to the correct repo; F11 adds `handover/DESIGN.md`.
+> The suite is now **198 / 198** `node:test` passing (the **181** figures elsewhere in this document
+> are the v0.3 baseline). Regression coverage: `src/test/auditHardening.test.ts` + `acceptance.test.ts`.
 
 > This is the **live supervision document** for ModelLane-BrainStrom. It is the
 > lock-step mirror of build reality. As of the **v0.3 pure-TypeScript port**, the

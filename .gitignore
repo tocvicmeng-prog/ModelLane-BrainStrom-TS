@@ -11,6 +11,9 @@ out/
 # Runtime cache (engine embeddings cache, generated at run/test time)
 data/
 
+# Audit artifacts (generated PDF/PNG/script — large, regenerable, not source)
+output/
+
 # Tooling / OS
 .vscode-test/
 *.log

@@ -13,8 +13,9 @@ out/test/**
 tsconfig.json
 package-lock.json
 
-# dev docs / caches / data (not part of the shipped extension)
+# dev docs / caches / data / audit artifacts (not part of the shipped extension)
 docs/**
 handover/**
 data/**
+output/**
 .git/**

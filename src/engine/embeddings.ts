@@ -28,7 +28,7 @@ export interface EmbeddingsClientOptions {
   model?: string;
   apiKey?: string | null;
   expectedDim?: number | null;
-  cacheDir?: string;
+  cacheDir?: string | null;
   /** Timeout in seconds (matches Python's int seconds). */
   timeout?: number;
   mockVectors?: Record<string, number[]> | null;
@@ -40,7 +40,8 @@ export class EmbeddingsClient {
   readonly model: string;
   readonly apiKey: string | null;
   readonly expectedDim: number | null;
-  readonly cacheDir: string;
+  // null => in-memory cache only (never writes a relative ./data path — audit F3).
+  readonly cacheDir: string | null;
   readonly timeout: number;
   readonly mockVectors: Record<string, number[]> | null;
   degraded = false;
@@ -53,7 +54,7 @@ export class EmbeddingsClient {
     this.model = opts.model ?? 'nomic-embed-text';
     this.apiKey = opts.apiKey ?? null;
     this.expectedDim = opts.expectedDim ?? null;
-    this.cacheDir = opts.cacheDir ?? './data/cache/embeddings';
+    this.cacheDir = opts.cacheDir ?? null;
     this.timeout = opts.timeout ?? 60;
     this.mockVectors = opts.mockVectors ?? null;
     this.fetchImpl = opts.fetchImpl ?? httpFetch;
@@ -65,6 +66,9 @@ export class EmbeddingsClient {
   }
 
   private diskGet(key: string): number[] | null {
+    if (!this.cacheDir) {
+      return null; // no cache dir configured -> in-memory only (audit F3)
+    }
     const p = path.join(this.cacheDir, `${key}.json`);
     if (fs.existsSync(p)) {
       try {
@@ -77,6 +81,9 @@ export class EmbeddingsClient {
   }
 
   private diskPut(key: string, vec: number[]): void {
+    if (!this.cacheDir) {
+      return; // no cache dir configured -> in-memory only (audit F3)
+    }
     try {
       fs.mkdirSync(this.cacheDir, { recursive: true });
       fs.writeFileSync(path.join(this.cacheDir, `${key}.json`), JSON.stringify(vec), 'utf-8');

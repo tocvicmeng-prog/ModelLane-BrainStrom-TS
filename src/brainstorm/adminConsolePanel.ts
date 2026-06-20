@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { BrainstormConfig, ConnectorRegistry, defaultConfig } from './connectorRegistry';
+import { validateConfig } from './configValidation';
 import { SecretsStore } from './secrets';
 
 /** A VS Code setting surfaced (and made switchable) inside the configure panel, so every
@@ -94,6 +95,13 @@ export class AdminConsolePanel {
       const cfg = msg.config as BrainstormConfig | undefined;
       if (!cfg || !Array.isArray(cfg.connectors) || !cfg.seats) {
         vscode.window.showErrorMessage('BrainStrom: invalid configuration payload.');
+        return;
+      }
+      // Full schema validation before persisting (audit F8): reject unknown connector
+      // kinds, empty ids, invalid URLs/prompt modes, negative limits, missing seats.
+      const problems = validateConfig(cfg);
+      if (problems.length > 0) {
+        vscode.window.showErrorMessage('BrainStrom: configuration not saved — ' + problems.slice(0, 6).join('; '));
         return;
       }
       await this.registry.setConfig(cfg);

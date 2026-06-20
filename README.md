@@ -14,10 +14,10 @@ The debate engine is the **Unit Cell** project (a two-agent deliberation-and-inq
 this edition **ports it, and the whole BrainStrom orchestration layer, to TypeScript** so the
 entire system runs *in the extension host* — no Python, no sidecar, no inter-process protocol.
 
-> **Status: v0.3 — pure-TypeScript port.** The Unit Cell engine and the BrainStrom orchestration
+> **Status: v0.5 — pure-TypeScript port, audit-hardened.** The Unit Cell engine and the BrainStrom orchestration
 > (decomposition, scheduling, chief-scribe aggregation, connectors, egress guard, security) are
 > ported to in-process TypeScript. The project **compiles clean** (`tsc`, strict) and **packages**
-> to an installable `.vsix`. **181 `node:test` tests pass** (the full former pytest suite, ported).
+> to an installable `.vsix`. **198 `node:test` tests pass** (the ported pytest suite + audit-hardening regressions).
 > The **in-editor runtime acceptance** (running a live debate against your models in VS Code) is
 > the remaining manual sign-off.
 
@@ -97,7 +97,7 @@ governance docs were authored for the original sidecar design; the runtime is no
 From the packaged `.vsix`:
 
 ```powershell
-code --install-extension ".\modellane-brainstrom-ts-0.4.0.vsix" --force
+code --install-extension ".\modellane-brainstrom-ts-0.5.0.vsix" --force
 ```
 
 Then **Developer: Reload Window**. (Build the `.vsix` yourself with the [Development](#development) steps.)
@@ -215,7 +215,7 @@ Honesty stances baked into the output: **σ_SI is a diversity signal, not a qual
 ```powershell
 npm install
 npm run compile      # tsc -> out/**/*.js   (strict; emits extension.js + engine/ + orchestrator/)
-npm test             # tsc + node --test "out/test/**/*.test.js"   (181 tests; zero network, zero tokens)
+npm test             # tsc + node --test "out/test/**/*.test.js"   (198 tests; zero network, zero tokens)
 
 # Package a .vsix
 npx --yes @vscode/vsce package --no-dependencies
@@ -234,7 +234,7 @@ src/                    TypeScript extension (forked ModelLane shell)
   orchestrator/           ported BrainStrom orchestration (decompose, scheduler, chiefScribe,
                           groupRunner, multiDebate, security, sessionState, types)
     connectors/           base, egress guard, openai, anthropic, openaiCompatible, cli, factory
-  test/                   node:test suite (181 tests, ported from the pytest suite)
+  test/                   node:test suite (198 tests: ported pytest suite + audit-hardening regressions)
 out/                    tsc output (shipped)
 docs/01-architecture/   CONSTITUTION · ARCHITECTURE · ENGINEERING · DASHBOARD (authored for the
                         original sidecar design; runtime is now in-process TS)
@@ -250,8 +250,8 @@ docs/01-architecture/   CONSTITUTION · ARCHITECTURE · ENGINEERING · DASHBOARD
 | In-process `EngineService` (replaces the RPC sidecar) | ✅ built; direct async calls |
 | TS extension (model branch, controller, sidebar, admin console) | ✅ compiles |
 | CLI connector (Codex/Claude) · multi-debater panel | ✅ ported |
-| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.4.0.vsix`) |
-| Test suite (`node:test`) | ✅ 181 / 181 pass |
+| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.5.0.vsix`) |
+| Test suite (`node:test`) | ✅ 198 / 198 pass |
 | In-VS-Code runtime acceptance | ⬜ manual (your models + VS Code) |
 
 ## Relationship to ModelLane

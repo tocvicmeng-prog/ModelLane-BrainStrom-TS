@@ -12,14 +12,17 @@
 //   * a bounded working directory (the OS temp dir by default — never the workspace);
 //   * a per-call timeout (kill on expiry) and a hard output cap;
 //   * single-shot "print" invocation only — the command must NOT run the CLI in an
-//     agentic/file-writing mode (`allowFileTools` defaults to false and the temp cwd
-//     bounds any stray writes).
+//     agentic/file-writing mode. `allowFileTools` defaults to false; when false each call
+//     runs in a FRESH throwaway temp dir that is deleted afterward, so stray writes are
+//     contained (audit F2). When true, the configured cwd is used.
 //
 // The command is user-configured (CLI flags differ per tool), e.g. a print/exec mode
 // that takes the prompt on stdin and returns a completion on stdout.
 
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as os from 'node:os';
+import * as path from 'node:path';
 
 import { AgentClient, type AgentClientOptions } from '../../engine/agent';
 import { EmbeddingsClient } from '../../engine/embeddings';
@@ -50,6 +53,7 @@ export interface CliAgentClientOptions {
   timeout?: number; // seconds
   maxOutputChars?: number;
   envPassthrough?: string[] | null;
+  allowFileTools?: boolean;
   agentLabel?: string;
 }
 
@@ -61,6 +65,7 @@ export class CliAgentClient extends AgentClient {
   private readonly cliTimeout: number; // seconds
   private readonly maxOutput: number;
   private readonly envPassthrough: string[] | null;
+  private readonly allowFileTools: boolean;
 
   constructor(opts: CliAgentClientOptions) {
     const base: AgentClientOptions = {
@@ -79,6 +84,7 @@ export class CliAgentClient extends AgentClient {
     this.cliTimeout = opts.timeout ?? DEFAULT_TIMEOUT;
     this.maxOutput = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT;
     this.envPassthrough = opts.envPassthrough ?? null;
+    this.allowFileTools = opts.allowFileTools ?? false;
   }
 
   // Inherit the user's FULL environment by default so the CLI finds its own login
@@ -145,9 +151,22 @@ export class CliAgentClient extends AgentClient {
   ): Promise<{ stdout: string; stderr: string; returncode: number }> {
     return new Promise((resolve, reject) => {
       const [cmd, ...args] = argv;
+      // When file tools are NOT allowed (default), run in a throwaway, isolated temp dir
+      // so any stray writes are contained and removed afterward (audit F2). When allowed,
+      // use the configured cwd (still bounded to the OS temp dir by default).
+      let workCwd = this.cliCwd;
+      let scratch: string | null = null;
+      if (!this.allowFileTools) {
+        try {
+          scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'brainstrom-cli-'));
+          workCwd = scratch;
+        } catch {
+          /* fall back to the configured cwd */
+        }
+      }
       const child = spawn(cmd, args, {
         shell: false,
-        cwd: this.cliCwd,
+        cwd: workCwd,
         env: this.env(),
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -168,6 +187,13 @@ export class CliAgentClient extends AgentClient {
         }
         settled = true;
         clearTimeout(timer);
+        if (scratch) {
+          try {
+            fs.rmSync(scratch, { recursive: true, force: true });
+          } catch {
+            /* best-effort cleanup */
+          }
+        }
         fn();
       };
 
@@ -269,6 +295,7 @@ export class CliConnector {
       timeout: this.cliTimeout,
       maxOutputChars: this.maxOutput,
       envPassthrough: this.envPassthrough,
+      allowFileTools: this.allowFileTools,
       agentLabel: args.agentLabel ?? 'A',
     });
   }

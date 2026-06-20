@@ -24,6 +24,8 @@ import {
 } from '../engine/types';
 import { UnitEngine } from '../engine/engine';
 
+import { httpFetch } from '../engine/http';
+import { makeGuardedFetch, RESEARCH_ALLOWLIST } from './connectors/egress';
 import { NoopKnowledgeEngine } from './security';
 import {
   RoleMap,
@@ -110,6 +112,17 @@ async function loadMultiDebate(): Promise<MultiDebateModule> {
 }
 
 const NOMIC_EMBED = 'nomic-embed-text';
+
+// Build the research slot. Research is remote BY NATURE; when enabled it is routed through
+// the egress guard restricted to the known research-API hosts (allowRemote, https-only,
+// SSRF/metadata + DNS-rebinding blocked) so the TOTAL-egress invariant holds even for
+// research (audit F1). Off => the privacy-default NoopKnowledgeEngine.
+export function buildResearch(researchEnabled: boolean): unknown {
+  if (!researchEnabled) {
+    return new NoopKnowledgeEngine();
+  }
+  return new KnowledgeEngine(30, 2, 0.5, makeGuardedFetch(httpFetch, true, RESEARCH_ALLOWLIST));
+}
 
 // --------------------------------------------------------------------------- run_group
 
@@ -317,7 +330,7 @@ export function clientsFromConnectors(
   // primary = judge client, second = agentB client (matches the engine's default mapping
   // intent, but always explicitly injected — never the engine default; F14).
   const harvester = new Harvester(judgeClient, emb, agentB);
-  const research: unknown = researchEnabled ? new KnowledgeEngine() : new NoopKnowledgeEngine();
+  const research: unknown = buildResearch(researchEnabled);
 
   return makeGroupClients({
     agentA,
@@ -379,7 +392,7 @@ export async function buildPanelClients(
     embeddings: emb,
   });
   const harvester = new Harvester(judgeClient, emb, debaters[debaters.length - 1] ?? null);
-  const research: unknown = researchEnabled ? new KnowledgeEngine() : new NoopKnowledgeEngine();
+  const research: unknown = buildResearch(researchEnabled);
   return new md.PanelClients({ debaters, judge, embeddings: emb, harvester, research });
 }
 
@@ -390,18 +403,19 @@ export async function buildPanelClients(
 export async function runPoint(
   spec: GroupSpec,
   connectors: ConnectorMap,
-  opts: { emit?: Emit; researchEnabled?: boolean } = {},
+  opts: { emit?: Emit; researchEnabled?: boolean; embeddingsCacheDir?: string | null } = {},
 ): Promise<GroupResult> {
   const emit = opts.emit;
   const researchEnabled = opts.researchEnabled ?? false;
+  const embeddingsCacheDir = opts.embeddingsCacheDir ?? null;
 
   const seats: SeatConfig[] = spec.roleMap ? spec.roleMap.debaterSeats() : [];
   if (spec.roleMap !== null && seats.length > 2) {
     const md = await loadMultiDebate();
-    const panel = await buildPanelClients(spec.roleMap, connectors, { researchEnabled });
+    const panel = await buildPanelClients(spec.roleMap, connectors, { researchEnabled, embeddingsCacheDir });
     return md.runPanel(spec, panel, { emit });
   }
-  const clients = clientsFromConnectors(spec.roleMap as RoleMap, connectors, { researchEnabled });
+  const clients = clientsFromConnectors(spec.roleMap as RoleMap, connectors, { researchEnabled, embeddingsCacheDir });
   return runGroup(spec, clients, { emit });
 }
 

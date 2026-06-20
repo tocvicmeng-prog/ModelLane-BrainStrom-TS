@@ -48,6 +48,12 @@ export class BrainstormController {
     return this.currentSecrets;
   }
 
+  /** Absolute embeddings-cache dir under the extension's global storage (audit F3) —
+   *  never a relative ./data path in production. */
+  private embeddingsCacheDir(): string {
+    return vscode.Uri.joinPath(this.context.globalStorageUri, 'embeddings').fsPath;
+  }
+
   async run(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
@@ -84,7 +90,9 @@ export class BrainstormController {
         progress.report(new vscode.LanguageModelTextPart(
           `🧠 Brainstorming **${latest}** (mode: ${cfg.mode}) — decomposing and running debates. ` +
           'Watch the **BrainStrom** view for live progress.\n\n'));
-        const r = await engine.runSession(buildSessionParams(latest, cfg, sessionId, allowRemote));
+        const sp = buildSessionParams(latest, cfg, sessionId, allowRemote);
+        sp.embeddings_cache_dir = this.embeddingsCacheDir();
+        const r = await engine.runSession(sp);
         await this.finish(r, latest, progress, token);
         return;
       }
@@ -95,8 +103,9 @@ export class BrainstormController {
         progress.report(new vscode.LanguageModelTextPart(
           `✅ Approved — running ${stored.points.length} debate group(s) for **${stored.domain}**. ` +
           'Watch the **BrainStrom** view.\n\n'));
-        const r = await engine.executePlan(
-          buildExecuteParams(stored.domain, cfg, sessionId, allowRemote, stored.points, stored.edges));
+        const ep = buildExecuteParams(stored.domain, cfg, sessionId, allowRemote, stored.points, stored.edges);
+        ep.embeddings_cache_dir = this.embeddingsCacheDir();
+        const r = await engine.executePlan(ep);
         this.plans.delete(sessionKey);
         await this.finish(r, stored.domain, progress, token);
         return;
@@ -126,6 +135,10 @@ export class BrainstormController {
       progress.report(new vscode.LanguageModelTextPart(
         `BrainStrom error: ${err?.message ?? err}. Check the ModelLane-BrainStrom output channel, ` +
         'and confirm your model endpoints are reachable.'));
+    } finally {
+      // Clear the in-memory secrets snapshot after every run path (success, plan-only,
+      // cancellation, or error) so it never outlives the run (audit F6 / S2).
+      this.currentSecrets = {};
     }
   }
 

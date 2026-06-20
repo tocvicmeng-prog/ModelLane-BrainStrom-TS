@@ -124,8 +124,8 @@ export class BaseConnector implements ConnectorInterface {
   }
 
   // Build an egress-guarded embeddings client (the secret stays inside the connector).
-  // `cacheDir` should be set by the caller to a path under the extension's
-  // globalStorageUri (F5) — never the repo or sidecar cwd.
+  // `cacheDir` should be a path under the extension's globalStorageUri (audit F3); when
+  // absent the client caches in-memory only and NEVER writes a relative ./data path.
   makeEmbeddingsClient(args: MakeEmbeddingsClientArgs = {}): EmbeddingsClient {
     validateEgress(this.baseUrl, this.allowRemote, this.allowlist);
     const opts: EmbeddingsClientOptions = {
@@ -133,7 +133,7 @@ export class BaseConnector implements ConnectorInterface {
       model: args.model ?? 'nomic-embed-text',
       apiKey: this.apiKey,
       expectedDim: args.expectedDim ?? null,
-      cacheDir: args.cacheDir ?? './data/cache/embeddings',
+      cacheDir: args.cacheDir ?? null,
       timeout: this.timeout,
     };
     return new EmbeddingsClient(opts);

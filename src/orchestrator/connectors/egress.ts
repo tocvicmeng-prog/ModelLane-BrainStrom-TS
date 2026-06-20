@@ -9,11 +9,12 @@
 //   * remote hosts require an explicit `allowRemote` opt-in AND membership in an
 //     allowlist AND https.
 //
-// Known limitation (documented, not silently ignored): hostname-based
-// classification does not resolve DNS, so DNS-rebinding to a private IP is out of
-// scope for the walking skeleton; the allowlist + https requirement bound the
-// remote surface. A resolve-and-recheck pass is a P1 hardening item (Risk R2 / S5).
+// `validateEgress` classifies by hostname only (no DNS). `makeGuardedFetch` then adds a
+// resolve-and-recheck pass before each request (audit F9 / Risk R2 / S5): the host is
+// resolved and every returned address is re-classified, so an allowlisted name that
+// resolves to a private / link-local / metadata address is blocked (DNS-rebinding defence).
 
+import { lookup } from 'node:dns/promises';
 import * as net from 'node:net';
 import { httpFetch, type FetchLike } from '../../engine/http';
 
@@ -29,6 +30,16 @@ const METADATA_HOSTS: ReadonlySet<string> = new Set([
 export const DEFAULT_REMOTE_ALLOWLIST: ReadonlySet<string> = new Set([
   'api.openai.com',
   'api.anthropic.com',
+]);
+
+// Allowlist for the external research providers (audit F1). Research is remote by
+// nature; it is routed through a guarded fetch restricted to exactly these hosts, so
+// even research can never reach an arbitrary, private, or metadata address.
+export const RESEARCH_ALLOWLIST: ReadonlySet<string> = new Set([
+  'en.wikipedia.org',
+  'api.semanticscholar.org',
+  'eutils.ncbi.nlm.nih.gov',
+  'export.arxiv.org',
 ]);
 
 /** Raised when a base URL violates the egress policy. */
@@ -232,9 +243,45 @@ export function validateEgress(
 }
 
 /**
- * Wrap a FetchLike so every request URL's host is validated against the egress
- * policy before the underlying fetch runs. The guarded fetch throws EgressError
- * synchronously-in-promise on a policy violation, never reaching the network.
+ * Resolve a URL's hostname and re-classify every returned address so an allowlisted DNS
+ * name that resolves to a private / link-local / metadata IP is blocked before the
+ * request leaves (DNS-rebinding defence, audit F9). Literal IPs and localhost are already
+ * fully classified by validateEgress, so they skip resolution.
+ */
+export async function assertResolvedHostSafe(rawUrl: string): Promise<void> {
+  let host: string;
+  try {
+    host = (new URL(rawUrl).hostname || '').toLowerCase();
+  } catch {
+    return;
+  }
+  if (!host || host === 'localhost' || host === 'ip6-localhost') {
+    return;
+  }
+  const lit = normaliseIpLiteral(host);
+  if (net.isIP(lit) !== 0) {
+    return; // a literal IP — validateEgress already classified it
+  }
+  let addrs: Array<{ address: string }>;
+  try {
+    addrs = await lookup(host, { all: true });
+  } catch {
+    throw new EgressError(`could not resolve host ${JSON.stringify(host)} for the egress check`);
+  }
+  for (const a of addrs) {
+    const ip = normaliseIpLiteral(a.address.toLowerCase());
+    if (METADATA_HOSTS.has(ip) || isLocalHost(a.address)) {
+      throw new EgressError(
+        `host ${JSON.stringify(host)} resolves to a blocked address ${JSON.stringify(a.address)} (DNS-rebinding)`,
+      );
+    }
+  }
+}
+
+/**
+ * Wrap a FetchLike so every request URL's host is validated against the egress policy
+ * (validateEgress) AND resolve-rechecked (assertResolvedHostSafe) before the underlying
+ * fetch runs. Throws EgressError on a policy violation, never reaching the network.
  */
 export function makeGuardedFetch(
   inner: FetchLike = httpFetch,
@@ -252,6 +299,7 @@ export function makeGuardedFetch(
           ? input.toString()
           : (input as Request).url;
     validateEgress(url, allowRemote, allowlist);
+    await assertResolvedHostSafe(url);
     return inner(input, init);
   }) as FetchLike;
   return guarded;

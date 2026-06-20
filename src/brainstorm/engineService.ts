@@ -175,6 +175,7 @@ async function executeImpl(
   const mode = params.mode ?? 'mixed';
   const sessionId = params.session_id ?? '';
   const researchEnabled = params.research_enabled ?? false;
+  const embeddingsCacheDir = params.embeddings_cache_dir ?? null;
   const byId = new Map<string, KnowledgePoint>(pset.points.map((p) => [p.id, p]));
 
   // Routes to the N-debater panel engine when the role map has >2 debater seats.
@@ -187,7 +188,7 @@ async function executeImpl(
       priorContext: prior,
       sessionId,
     });
-    return runPoint(spec, connectors as Record<string, any>, { emit, researchEnabled });
+    return runPoint(spec, connectors as Record<string, any>, { emit, researchEnabled, embeddingsCacheDir });
   };
 
   const budget = new BudgetGovernor(params.max_total_tokens ?? null);
@@ -219,6 +220,7 @@ async function defaultExecutor(
   const roleMap = roleMapFromParams(params);
   const clients = clientsFromConnectors(roleMap, connectors as Record<string, any>, {
     researchEnabled: params.research_enabled ?? false,
+    embeddingsCacheDir: params.embeddings_cache_dir ?? null,
   });
   const p = params.point as Record<string, any>;
   const spec: GroupSpec = makeGroupSpec({
