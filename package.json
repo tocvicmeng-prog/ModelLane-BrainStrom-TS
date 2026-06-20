@@ -2,7 +2,7 @@
   "name": "modellane-brainstrom-ts",
   "displayName": "ModelLane-BrainStrom (TS)",
   "description": "Pure-TypeScript multi-LLM moderated brainstorming / critical / heuristic / game-theoretic debates in VS Code — end-to-end typed, in-process async engine (no Python sidecar)",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "modellane",
   "author": "Tocvic M",
   "license": "GPL-3.0-or-later",

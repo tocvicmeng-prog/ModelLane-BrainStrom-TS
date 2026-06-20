@@ -145,6 +145,24 @@ documentation, not a separate mechanism.
 | `game-theoretic` | incentives / strategy | high-rigor, balanced, verify all disputes |
 | `mixed` (default) | routed per point kind | atomic→critical, lens→heuristic |
 
+## Personas & skill files
+
+Each seat (and panel debater) has a **persona** — sent to that model as its system prompt. In
+**BrainStrom: Configure** you can either:
+
+- **type** a short role description in the persona box, or
+- **double-click** the persona box to **load a Markdown skill file** — a `.md`/`.txt` file describing
+  how that persona should *think and search* (e.g. "prefer academic databases", "reason from first
+  principles", "use analogical / reverse thinking", a specific mathematical method). Typed text and
+  the skill file are **combined** into the system prompt; a removable 📎 chip shows what's attached.
+
+A skill file is plain Markdown, optionally with a simple `key: value` front-matter block that is
+rendered as directives. See [`examples/skills/first-principles-researcher.md`](examples/skills/first-principles-researcher.md).
+Skill files are stored in the extension config (not the OS keychain) — don't put secrets in them.
+
+Every field in the configure panel also has a **?** help icon — click it for what to fill in and the
+field rules; click again (or press Escape) to close.
+
 ## Settings
 
 | Setting | Default | Purpose |
