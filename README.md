@@ -2,6 +2,12 @@
 
 **Multi-LLM moderated brainstorming — game-theoretic, critical, and heuristic debates — inside VS Code. Pure TypeScript, end-to-end typed, fully in-process.**
 
+[![Release](https://img.shields.io/github/v/release/tocvicmeng-prog/ModelLane-BrainStrom-TS?sort=semver&color=success)](https://github.com/tocvicmeng-prog/ModelLane-BrainStrom-TS/releases/latest)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A5%201.104-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
+[![node:test](https://img.shields.io/badge/node%3Atest-198%20passing-brightgreen.svg)](#development)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+
 ModelLane-BrainStrom forks and upgrades [ModelLane](#relationship-to-modellane) with a new
 synthetic chat model, **🧠 Brainstorm Debate Model**. Pick it in VS Code Chat, give it a topic,
 and a local **moderator/scribe** model orchestrates two or more **debate models** (remote or
@@ -20,6 +26,8 @@ entire system runs *in the extension host* — no Python, no sidecar, no inter-p
 > to an installable `.vsix`. **198 `node:test` tests pass** (the ported pytest suite + audit-hardening regressions).
 > The **in-editor runtime acceptance** (running a live debate against your models in VS Code) is
 > the remaining manual sign-off.
+
+**Contents:** [How it works](#how-it-works) · [Two functions, one panel](#two-functions-one-panel) · [Architecture](#architecture-in-one-breath) · [Requirements](#requirements) · [Install](#install) · [Quick start](#quick-start) · [Seats](#debate-models--seats) · [Modes](#debate-modes) · [Personas & skills](#personas--skill-files) · [Settings](#settings) · [Commands](#commands) · [Security](#security--privacy) · [Development](#development) · [License](#license)
 
 ---
 
@@ -94,13 +102,13 @@ governance docs were authored for the original sidecar design; the runtime is no
 
 ## Install
 
-From the packaged `.vsix`:
+Grab the latest `.vsix` from [**Releases**](https://github.com/tocvicmeng-prog/ModelLane-BrainStrom-TS/releases/latest), then:
 
 ```powershell
-code --install-extension ".\modellane-brainstrom-ts-0.5.0.vsix" --force
+code --install-extension ".\modellane-brainstrom-ts-0.5.1.vsix" --force
 ```
 
-Then **Developer: Reload Window**. (Build the `.vsix` yourself with the [Development](#development) steps.)
+Then **Developer: Reload Window**. (Or build the `.vsix` yourself with the [Development](#development) steps.)
 
 ## Quick start
 
@@ -194,13 +202,16 @@ BrainStrom is built local-first and treats model output as untrusted data:
 
 - **Secrets** live only in VS Code **SecretStorage** (OS keychain) — never in settings, logs,
   reports, exports, or any process argv/env. They are read into memory only when a session runs.
-- **Egress guard**: loopback/private endpoints are allowed by default; **remote endpoints require
-  `brainstrom.allowRemote` + an allowlist + HTTPS**; cloud-metadata addresses are always blocked.
-  The guard is **total** — every model/research client is built through the connector layer, proven
-  by a "trap-client" test that fails if the engine ever constructs an unguarded client.
-- **CLI connector** runs `shell:false` with an argv list, a bounded temp cwd, a per-call timeout and
-  an output cap; it inherits the user environment so the CLI finds its own login, and never receives
-  BrainStrom-managed API keys.
+- **Egress guard (total)**: loopback/private endpoints are allowed by default; **remote endpoints
+  require `brainstrom.allowRemote` + an allowlist + HTTPS**; cloud-metadata addresses are always
+  blocked, and hostnames are **resolved and re-checked** before each request (DNS-rebinding defence).
+  Every model **and research** call goes through the connector layer / a guarded fetch — proven by a
+  "trap-client" test that fails if the engine ever constructs an unguarded client. External research
+  is additionally restricted to a fixed allowlist of research-API hosts.
+- **CLI connector** runs `shell:false` with an argv list, a per-call timeout and an output cap, and —
+  unless `allowFileTools` is enabled — a **fresh throwaway temp working directory that is deleted
+  after each call**. It inherits the user environment so the CLI finds its own login, and never
+  receives BrainStrom-managed API keys.
 - **Prompt-injection defence**: decomposition output, inter-group context, and aggregation inputs
   are wrapped/quarantined; injected "knowledge points" are isolated, not executed.
 - **Webviews** are CSP-hardened (`default-src 'none'`, nonce-gated scripts, no remote content) and
@@ -250,7 +261,7 @@ docs/01-architecture/   CONSTITUTION · ARCHITECTURE · ENGINEERING · DASHBOARD
 | In-process `EngineService` (replaces the RPC sidecar) | ✅ built; direct async calls |
 | TS extension (model branch, controller, sidebar, admin console) | ✅ compiles |
 | CLI connector (Codex/Claude) · multi-debater panel | ✅ ported |
-| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.5.0.vsix`) |
+| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.5.1.vsix`) |
 | Test suite (`node:test`) | ✅ 198 / 198 pass |
 | In-VS-Code runtime acceptance | ⬜ manual (your models + VS Code) |
 
