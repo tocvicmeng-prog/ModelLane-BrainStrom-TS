@@ -97,7 +97,7 @@ governance docs were authored for the original sidecar design; the runtime is no
 From the packaged `.vsix`:
 
 ```powershell
-code --install-extension ".\modellane-brainstrom-ts-0.3.1.vsix" --force
+code --install-extension ".\modellane-brainstrom-ts-0.3.3.vsix" --force
 ```
 
 Then **Developer: Reload Window**. (Build the `.vsix` yourself with the [Development](#development) steps.)
@@ -160,8 +160,9 @@ A skill file is plain Markdown, optionally with a simple `key: value` front-matt
 rendered as directives. See [`examples/skills/first-principles-researcher.md`](examples/skills/first-principles-researcher.md).
 Skill files are stored in the extension config (not the OS keychain) — don't put secrets in them.
 
-Every field in the configure panel also has a **?** help icon — click it for what to fill in and the
-field rules; click again (or press Escape) to close.
+Common fields — **connector id**, **model**, **family** — are dropdowns of recommended values with an
+**Other…** option that switches to a free-text box for custom values. Every field also has a **?** help
+icon next to its name — click it for what to fill in and the field rules; click again (or press Escape) to close.
 
 ## Settings
 
@@ -244,7 +245,7 @@ docs/01-architecture/   CONSTITUTION · ARCHITECTURE · ENGINEERING · DASHBOARD
 | In-process `EngineService` (replaces the RPC sidecar) | ✅ built; direct async calls |
 | TS extension (model branch, controller, sidebar, admin console) | ✅ compiles |
 | CLI connector (Codex/Claude) · multi-debater panel | ✅ ported |
-| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.3.0.vsix`) |
+| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.3.3.vsix`) |
 | Test suite (`node:test`) | ✅ 181 / 181 pass |
 | In-VS-Code runtime acceptance | ⬜ manual (your models + VS Code) |
 

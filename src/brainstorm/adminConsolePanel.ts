@@ -128,11 +128,17 @@ export class AdminConsolePanel {
     .bar { margin-top: 16px; display: flex; gap: 8px; }
     .cli-only { display: none; gap: 6px; }
     .seat { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px; margin: 6px 0; }
-    .fieldwrap { display: inline-flex; align-items: center; gap: 2px; }
-    .help { display: inline-flex; align-items: center; justify-content: center; min-width: 15px; height: 15px;
-            padding: 0 3px; margin-left: 3px; border-radius: 50%; font-size: 11px; line-height: 1; cursor: pointer;
-            user-select: none; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-    .help:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .fieldcol { display: inline-flex; flex-direction: column; }
+    .lbl { display: inline-flex; align-items: center; gap: 2px; font-size: 0.85em;
+           color: var(--vscode-descriptionForeground); margin-bottom: 2px; }
+    .help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+            border-radius: 50%; border: 1px solid var(--vscode-descriptionForeground); background: transparent;
+            color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1; cursor: pointer; user-select: none; }
+    .help:hover { color: var(--vscode-foreground); border-color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+    .combo { display: inline-flex; align-items: center; gap: 4px; }
+    .combo-select, .combo-input { width: 150px; }
+    .combo-back { padding: 2px 6px; min-width: 22px; }
+    .persona-row { display: inline-flex; align-items: center; gap: 4px; }
     #help-pop { position: absolute; display: none; max-width: 340px; padding: 8px 10px; z-index: 50;
             background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
             color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
@@ -168,10 +174,10 @@ export class AdminConsolePanel {
 
   <h3>Session <span class="help" data-help="session">?</span></h3>
   <div class="row">
-    <span class="fieldwrap"><label>mode<select id="mode"></select></label><span class="help" data-help="mode">?</span></span>
-    <span class="fieldwrap"><label>max points<input id="maxPoints" class="num" type="number" min="2" max="20" /></label><span class="help" data-help="maxPoints">?</span></span>
-    <span class="fieldwrap"><label>max total tokens<input id="maxTotalTokens" class="num" type="number" min="0" /></label><span class="help" data-help="maxTotalTokens">?</span></span>
-    <span class="fieldwrap"><label>research<input id="researchEnabled" type="checkbox" /></label><span class="help" data-help="research">?</span></span>
+    <span class="fieldcol"><span class="lbl">mode <span class="help" data-help="mode">?</span></span><select id="mode"></select></span>
+    <span class="fieldcol"><span class="lbl">max points <span class="help" data-help="maxPoints">?</span></span><input id="maxPoints" class="num" type="number" min="2" max="20" /></span>
+    <span class="fieldcol"><span class="lbl">max total tokens <span class="help" data-help="maxTotalTokens">?</span></span><input id="maxTotalTokens" class="num" type="number" min="0" /></span>
+    <span class="fieldcol"><span class="lbl">research <span class="help" data-help="research">?</span></span><input id="researchEnabled" type="checkbox" /></span>
   </div>
 
   <div class="bar">
@@ -202,8 +208,62 @@ export class AdminConsolePanel {
       return key ? el('span', { class: 'help', 'data-help': key, title: 'What is this?' }, ['?']) : document.createTextNode('');
     }
     function field(labelText, input, helpKey) {
-      const label = el('label', {}, [labelText, input]);
-      return helpKey ? el('span', { class: 'fieldwrap' }, [label, helpSpan(helpKey)]) : label;
+      return el('span', { class: 'fieldcol' }, [el('span', { class: 'lbl' }, [labelText, helpSpan(helpKey)]), input]);
+    }
+
+    // ---- combo field: a dropdown of common values + an 'Other…' escape to free text ----
+    const MODEL_PRESETS = ['local-model', 'gpt-4o', 'gpt-4o-mini', 'o3-mini', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'];
+    const FAMILY_PRESETS = ['debater-a', 'debater-b', 'moderator', 'harvester', 'unknown'];
+    function currentConnectorIds() {
+      const ids = [...document.querySelectorAll('.connector-row .c-id')].map(i => i.value.trim()).filter(Boolean);
+      const uniq = [...new Set(ids)];
+      return uniq.length ? uniq : ['local'];
+    }
+    function comboControl(cls, value, presetsOrFn) {
+      value = value || '';
+      const wrap = el('span', { class: 'combo' }, []);
+      const holder = el('input', { class: cls, type: 'hidden', value: value });
+      wrap.appendChild(holder);
+      const setVal = (v) => { holder.value = v; };
+      const presets = () => (typeof presetsOrFn === 'function' ? presetsOrFn() : presetsOrFn) || [];
+      const clearUi = () => { [...wrap.querySelectorAll('.combo-ui')].forEach(n => n.remove()); };
+      function populate(sel, selected) {
+        sel.replaceChildren();
+        const list = presets();
+        for (const p of list) sel.appendChild(el('option', { value: p }, [p]));
+        if (selected && list.indexOf(selected) < 0) sel.appendChild(el('option', { value: selected }, [selected]));
+        sel.appendChild(el('option', { value: '__other__' }, ['Other…']));
+        sel.value = selected ? selected : (list[0] || '');
+      }
+      function showSelect(selected) {
+        clearUi();
+        const sel = el('select', { class: 'combo-ui combo-select' });
+        populate(sel, selected);
+        setVal(sel.value === '__other__' ? '' : sel.value);
+        sel.addEventListener('focus', () => populate(sel, holder.value || undefined));
+        sel.addEventListener('change', () => { if (sel.value === '__other__') showInput(''); else setVal(sel.value); });
+        wrap.appendChild(sel);
+      }
+      function showInput(v) {
+        clearUi();
+        const inp = el('input', { class: 'combo-ui combo-input', value: v || '', placeholder: 'custom value' });
+        setVal(inp.value);
+        inp.addEventListener('input', () => setVal(inp.value));
+        const back = el('button', { class: 'combo-ui combo-back secondary', type: 'button', title: 'Choose from the list' }, ['\\u25BE']);
+        back.addEventListener('click', () => showSelect(holder.value || undefined));
+        wrap.appendChild(inp);
+        wrap.appendChild(back);
+        inp.focus();
+      }
+      if (value && presets().indexOf(value) < 0) showInput(value);
+      else showSelect(value);
+      return wrap;
+    }
+    function comboField(labelText, helpKey, cls, value, presetsOrFn) {
+      return el('span', { class: 'fieldcol' }, [
+        el('span', { class: 'lbl' }, [labelText, helpSpan(helpKey)]),
+        comboControl(cls, value, presetsOrFn),
+      ]);
     }
     function select(cls, options, value) {
       const s = el('select', { class: cls });
@@ -221,9 +281,9 @@ export class AdminConsolePanel {
       'c-promptvia': { t: 'Prompt via', b: '(cli only) How the prompt reaches the CLI:\\nstdin = piped to standard input.\\narg = appended as an argument (or replaces {prompt} in the command).' },
       'c-timeout': { t: 'CLI timeout', b: '(cli only) Maximum seconds to wait for one CLI call before it fails. Default 120.' },
       seats: { t: 'Seats', b: 'The three debate roles mapped onto the engine:\\nagent_a / agent_b = the two debaters.\\njudge = moderator / referee / chief-scribe.\\nEach seat = a connector + model + persona.' },
-      conn: { t: 'Connector id', b: 'The id of a connector defined above (e.g. local). Must match exactly. Required.' },
-      model: { t: 'Model', b: 'The model name to request from that connector (e.g. local-model, gpt-4o, claude-3-5-sonnet).' },
-      family: { t: 'Model family', b: 'A short label for the model family (e.g. debater-a, moderator).\\nUsed to down-weight agreement between same-family models and to verify with a different family.' },
+      conn: { t: 'Connector id', b: 'Pick a connector defined above (e.g. local), or choose Other… to type a custom id.\\nMust match a connector id exactly. Required.' },
+      model: { t: 'Model', b: 'Pick a common model, or choose Other… to type any model name your connector serves (e.g. local-model, gpt-4o, claude-3-5-sonnet).' },
+      family: { t: 'Model family', b: 'A short label for the model family (e.g. debater-a, moderator). Pick one or choose Other… for a custom value.\\nUsed to down-weight agreement between same-family models and to verify with a different family.' },
       persona: { t: 'Persona', b: 'This seat\\u2019s role and instructions — sent to the model as its system prompt.\\n\\nType a short description, OR double-click the box to load a Markdown skill file (retrieval preferences, reasoning style, cognitive frameworks). Typed text and the skill file are combined.' },
       temp: { t: 'Temperature', b: 'Sampling temperature 0–2 (blank = 0.7).\\nLower = focused / deterministic (good for a critic or judge); higher = exploratory / diverse (good for ideation).' },
       debaters: { t: 'Panel debaters', b: 'Optional. Add 3 or more debaters to run each knowledge point as an N-way panel.\\nFewer than 3 falls back to agent_a / agent_b.\\nEach debater also takes a persona / skill file.' },
@@ -319,7 +379,10 @@ export class AdminConsolePanel {
       CHIPS.set(targetId, chipBox);
       if (skill && skill.name) SKILLS.set(targetId, { name: String(skill.name), content: String(skill.content || '') });
       renderChip(targetId);
-      return el('span', { class: 'fieldwrap' }, [el('label', {}, ['persona', input]), helpSpan('persona'), chipBox]);
+      return el('span', { class: 'fieldcol' }, [
+        el('span', { class: 'lbl' }, ['persona', helpSpan('persona')]),
+        el('span', { class: 'persona-row' }, [input, chipBox]),
+      ]);
     }
 
     function seatBlock(name, s) {
@@ -327,9 +390,9 @@ export class AdminConsolePanel {
       return el('div', { class: 'seat', id: 'seat-' + name }, [
         el('b', {}, [name]),
         el('div', { class: 'row' }, [
-          field('connector id', el('input', { class: 's-conn id', value: s.connectorId || '' }), 'conn'),
-          field('model', el('input', { class: 's-model model', value: s.model || '' }), 'model'),
-          field('family', el('input', { class: 's-family fam', value: s.family || '' }), 'family'),
+          comboField('connector id', 'conn', 's-conn', s.connectorId, currentConnectorIds),
+          comboField('model', 'model', 's-model', s.model, MODEL_PRESETS),
+          comboField('family', 'family', 's-family', s.family, FAMILY_PRESETS),
           personaField('seat:' + name, s.persona, s.skill, 's-persona'),
           field('temp', el('input', { class: 's-temp num', type: 'number', step: '0.1', value: (s.temperature ?? '') }), 'temp'),
         ]),
@@ -341,9 +404,9 @@ export class AdminConsolePanel {
       const uid = ++DEB_UID;
       const targetId = 'deb:' + uid;
       const row = el('div', { class: 'debater-row row', 'data-uid': String(uid) }, [
-        field('connector id', el('input', { class: 'd-conn id', value: d.connectorId || '' }), 'conn'),
-        field('model', el('input', { class: 'd-model model', value: d.model || '' }), 'model'),
-        field('family', el('input', { class: 'd-family fam', value: d.family || '' }), 'family'),
+        comboField('connector id', 'conn', 'd-conn', d.connectorId, currentConnectorIds),
+        comboField('model', 'model', 'd-model', d.model, MODEL_PRESETS),
+        comboField('family', 'family', 'd-family', d.family, FAMILY_PRESETS),
         personaField(targetId, d.persona, d.skill, 'd-persona'),
         field('temp', el('input', { class: 'd-temp num', type: 'number', step: '0.1', value: (d.temperature ?? '') }), 'temp'),
         el('button', { class: 'secondary d-remove' }, ['Remove']),
