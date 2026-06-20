@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { EngineEvent } from './engineService';
+import { nonce as genNonce } from '../webview/theme';
 
 /**
  * brainstormViewProvider.ts (N18) — the live sidebar board (STRUCTURED; audit F7).
@@ -40,7 +41,7 @@ export class BrainstormViewProvider implements vscode.WebviewViewProvider {
   }
 
   private html(_webview: vscode.Webview): string {
-    const nonce = makeNonce();
+    const nonce = genNonce();
     const csp = [
       `default-src 'none'`,
       `style-src 'nonce-${nonce}'`,
@@ -427,11 +428,4 @@ export class BrainstormViewProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
-}
-
-function makeNonce(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let out = '';
-  for (let i = 0; i < 32; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
-  return out;
 }

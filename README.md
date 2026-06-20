@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/tocvicmeng-prog/ModelLane-BrainStrom-TS?sort=semver&color=success)](https://github.com/tocvicmeng-prog/ModelLane-BrainStrom-TS/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A5%201.104-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
-[![node:test](https://img.shields.io/badge/node%3Atest-198%20passing-brightgreen.svg)](#development)
+[![node:test](https://img.shields.io/badge/node%3Atest-215%20passing-brightgreen.svg)](#development)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 ModelLane-BrainStrom forks and upgrades [ModelLane](#relationship-to-modellane) with a new
@@ -20,10 +20,10 @@ The debate engine is the **Unit Cell** project (a two-agent deliberation-and-inq
 this edition **ports it, and the whole BrainStrom orchestration layer, to TypeScript** so the
 entire system runs *in the extension host* — no Python, no sidecar, no inter-process protocol.
 
-> **Status: v0.5 — pure-TypeScript port, audit-hardened.** The Unit Cell engine and the BrainStrom orchestration
+> **Status: v0.6 — audit-hardened, with an intuitive Configure dashboard.** The Unit Cell engine and the BrainStrom orchestration
 > (decomposition, scheduling, chief-scribe aggregation, connectors, egress guard, security) are
 > ported to in-process TypeScript. The project **compiles clean** (`tsc`, strict) and **packages**
-> to an installable `.vsix`. **198 `node:test` tests pass** (the ported pytest suite + audit-hardening regressions).
+> to an installable `.vsix`. **215 `node:test` tests pass** (the ported pytest suite + audit-hardening regressions).
 > The **in-editor runtime acceptance** (running a live debate against your models in VS Code) is
 > the remaining manual sign-off.
 
@@ -105,7 +105,7 @@ governance docs were authored for the original sidecar design; the runtime is no
 Grab the latest `.vsix` from [**Releases**](https://github.com/tocvicmeng-prog/ModelLane-BrainStrom-TS/releases/latest), then:
 
 ```powershell
-code --install-extension ".\modellane-brainstrom-ts-0.5.1.vsix" --force
+code --install-extension ".\modellane-brainstrom-ts-0.6.1.vsix" --force
 ```
 
 Then **Developer: Reload Window**. (Or build the `.vsix` yourself with the [Development](#development) steps.)
@@ -168,6 +168,16 @@ A skill file is plain Markdown, optionally with a simple `key: value` front-matt
 rendered as directives. See [`examples/skills/first-principles-researcher.md`](examples/skills/first-principles-researcher.md).
 Skill files are stored in the extension config (not the OS keychain) — don't put secrets in them.
 
+The Configure panel is organized as a **dashboard**: a left **section rail**
+(Setup · Connectors · Seats · Panel · Session · Settings), a **Setup overview** that shows your
+debate pipeline at a glance and flags any seat whose connector id isn't defined yet, and a **pinned
+save bar** that lights up when you have unsaved changes. Each connector has a **Test** button that
+checks reachability (through the egress guard) with a green/red dot; invalid settings are flagged
+**inline** on the offending field; and **Draft with local model** turns a plain-English description
+into a starting configuration (your local model drafts it; you review before saving). The chat panel
+shows the **active model + a connection dot**, an empty state with example prompts, and an inline
+error banner when the server can't be reached.
+
 Common fields — **connector id**, **model**, **family** — are dropdowns of recommended values with an
 **Other…** option that switches to a free-text box for custom values. Every field also has a **?** help
 icon next to its name — click it for what to fill in and the field rules; click again (or press Escape) to close.
@@ -226,7 +236,7 @@ Honesty stances baked into the output: **σ_SI is a diversity signal, not a qual
 ```powershell
 npm install
 npm run compile      # tsc -> out/**/*.js   (strict; emits extension.js + engine/ + orchestrator/)
-npm test             # tsc + node --test "out/test/**/*.test.js"   (198 tests; zero network, zero tokens)
+npm test             # tsc + node --test "out/test/**/*.test.js"   (215 tests; zero network, zero tokens)
 
 # Package a .vsix
 npx --yes @vscode/vsce package --no-dependencies
@@ -244,8 +254,8 @@ src/                    TypeScript extension (forked ModelLane shell)
                           metrics, embeddings, research, budget, config, engine, + http/rng/util helpers)
   orchestrator/           ported BrainStrom orchestration (decompose, scheduler, chiefScribe,
                           groupRunner, multiDebate, security, sessionState, types)
-    connectors/           base, egress guard, openai, anthropic, openaiCompatible, cli, factory
-  test/                   node:test suite (198 tests: ported pytest suite + audit-hardening regressions)
+    connectors/           base, egress guard, openai, anthropic, openaiCompatible, cli, factory, probe
+  test/                   node:test suite (215 tests: ported pytest suite + audit-hardening regressions)
 out/                    tsc output (shipped)
 docs/01-architecture/   CONSTITUTION · ARCHITECTURE · ENGINEERING · DASHBOARD (authored for the
                         original sidecar design; runtime is now in-process TS)
@@ -261,8 +271,8 @@ docs/01-architecture/   CONSTITUTION · ARCHITECTURE · ENGINEERING · DASHBOARD
 | In-process `EngineService` (replaces the RPC sidecar) | ✅ built; direct async calls |
 | TS extension (model branch, controller, sidebar, admin console) | ✅ compiles |
 | CLI connector (Codex/Claude) · multi-debater panel | ✅ ported |
-| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.5.1.vsix`) |
-| Test suite (`node:test`) | ✅ 198 / 198 pass |
+| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.6.1.vsix`) |
+| Test suite (`node:test`) | ✅ 215 / 215 pass |
 | In-VS-Code runtime acceptance | ⬜ manual (your models + VS Code) |
 
 ## Relationship to ModelLane

@@ -115,15 +115,10 @@ export function activate(context: vscode.ExtensionContext) {
       }
     });
   });
-  guard('status item', () => {
-    const status = vscode.window.createStatusBarItem('modellane.brainstrom.sense', vscode.StatusBarAlignment.Right, 9999);
-    status.name = 'ModelLane-BrainStrom';
-    status.text = '$(sync) BrainStrom Refresh';
-    status.tooltip = 'Sense and refresh installed local models for VS Code Chat';
-    status.command = 'lmstudio.senseLocalModels';
-    status.show();
-    context.subscriptions.push(status);
-  });
+  // (Removed the separate "BrainStrom Refresh" status-bar button: it duplicated the
+  // model/connection status item from statusBar.ts and the affordances already on the
+  // Command Palette + chat model-picker manager. One status item keeps the bar uncluttered;
+  // "Sense and refresh installed models" stays on the lmstudio.senseLocalModels command.)
 
   console.log('ModelLane-BrainStrom extension activated');
 }

@@ -113,6 +113,9 @@ mapping already used across the three files.
 | Code / preformatted | `--vscode-textBlockQuote-background`, `--vscode-textPreformat-foreground`, `--vscode-editor-font-family` | inline code, `<pre>`, code-lang label |
 | Hover-widget popover | `--vscode-editorHoverWidget-background` / `-foreground` / `-border` (fall back to `editorWidget` / `foreground` / `panel-border`) | the `?` help popover |
 | Inactive selection | `--vscode-editor-inactiveSelectionBackground` | assistant chat bubble bg |
+| Active nav item | `--vscode-list-activeSelectionBackground` / `-Foreground` (fall back to `toolbar-hoverBackground` / `foreground`) | Configure section-rail active item |
+| Status / health dots | `--vscode-charts-green` (ok) · `--vscode-charts-yellow` → `editorWarning-foreground` (warn) · `--vscode-errorForeground` (error) | Setup-overview config dots, unsaved-changes dot, board status badges, connector Test dot |
+| Inline validation / error banner | `--vscode-inputValidation-errorBackground` / `-errorBorder` (fall back to `editor-inactiveSelectionBackground` / `errorForeground`) | Configure `.valbanner` / `.field-error`, chat `#error-banner` |
 
 **Rule:** if a needed role has no token above, pick the closest VS Code theme variable and
 add it here — do **not** introduce a hex/rgb literal. Always supply a fallback for less
@@ -142,8 +145,9 @@ common tokens, e.g. `var(--vscode-input-border, transparent)`.
 A compact, editor-density system (this is a developer tool inside a side panel, not a
 marketing page).
 
-- **Panel padding.** Chat body is a full-height (`height: 100vh`) flex column; Configure
-  body `12px`; Live Board `8px`.
+- **Panel padding.** Chat body and the Configure panel are full-height (`height: 100%`) flex
+  columns; the Configure **content** area scrolls at `12px 14px` between a fixed left section
+  rail and a pinned save bar (§6.8); the Live Board body is `8px`.
 - **Rows.** The Configure `.row` is `display:flex; flex-wrap:wrap; gap:6px;
   align-items:center; margin:4px 0; padding:6px; border:1px solid panel-border;
   border-radius:4px`. Grouped blocks (`.seat`) add an `8px` padded, bordered container with
@@ -229,30 +233,96 @@ render. **Rule:** show kind-specific fields only when relevant; default them saf
 
 ---
 
+### 6.8 Configure dashboard shell (section rail + Setup overview + pinned save bar)
+The Configure panel is a `height:100%` flex column built around three parts. A left **section
+rail** (`.rail`, 152px — `Setup · Connectors · Seats · Panel · Session · Settings`) switches a
+single visible `.section` inside the scrolling `.content` area; rail items are native `<button>`s
+(active = `list-activeSelectionBackground`) and a couple carry a muted count badge (connectors,
+panel size). Hidden sections use the `hidden` attribute, so **all rows stay in the DOM and save
+serialization is unaffected**. A **pinned save bar** (`.savebar`) sits at the bottom with the
+primary **Save configuration** and secondary **Reset to defaults**, plus an **Unsaved-changes**
+indicator (`.dirty` — a `charts-yellow` dot) that appears after the first edit (delegated
+`input` / `change` / structural-click on `.content`) and clears on Save / Reset.
+
+The **Setup** section is an at-a-glance overview: a 3-card grid mapping each seat (`agent_a` /
+`agent_b` / `judge`) to its connector + model with a **config-consistency dot** (green = the
+seat's connector id is defined under Connectors and a model is set; amber = connector id not yet
+defined; red = no connector chosen — via the §3 status tokens), plus a one-line summary (mode ·
+points · research · connector count · panel size). It is a **static config check, not a live
+connection test**, and is labeled as such (honest-uncertainty, §1.2 — a real connection test is a
+separate, deferred P0 item). It is rebuilt from the current form each time Setup is shown.
+
+**Rule:** a new config group becomes a new `.section` + rail item (not another block appended to
+one long scroll); give every control a `?` help entry (§6.1); keep every control serializable from
+the DOM even while its section is hidden; never let the overview imply live connectivity it has
+not measured.
+
+### 6.9 v0.6.1 additions — connection status, inline validation, AI draft, chat status, shared theme
+- **Shared primitives (`src/webview/theme.ts`).** The 32-char CSP `nonce()` (was copied verbatim in
+  all three panels) and the canonical on/off `SWITCH_CSS` (§6.2) live here and are imported by the
+  panels. Per-panel CSS stays per-panel **by design** (the surfaces legitimately differ — the chat
+  is a full-height flex column on the sidebar background; the board/Configure are not); only what
+  must be identical is shared. New shared primitives go here, `--vscode-*` only.
+- **Connector "Test" + status dot (P0-1).** Each connector row has a `Test` button and a `.c-status`
+  dot: grey (untested) → `charts-yellow` (testing) → `charts-green` (reachable) / `errorForeground`
+  (failed). The probe (`orchestrator/connectors/probe.ts`) runs through the **egress guard**, reads
+  the key from SecretStorage in the extension (never the webview), and is a real reachability/auth
+  check (CLI connectors are checked locally, no network). It reports an honest one-line detail.
+- **Inline per-field validation (P0-2).** `validateConfigDetailed` returns `{field, message}`; on a
+  failed Save the panel marks each offending control (`.field-error`) with an `.error-hint` beneath
+  it, summarizes the rest in a `.valbanner`, and switches to the first offending section. Editing a
+  field clears its error. The legacy `validateConfig(): string[]` is unchanged (tests intact).
+- **Skill-file attach button (P1-6).** Each persona has a visible 📎 attach button (in addition to
+  the double-click) → the same `pickSkillFile` round-trip + chip (§6.4).
+- **AI draft-config (P2-7).** A Setup-section "Draft with local model" input asks a configured LOCAL
+  model for a JSON config, validates it with `validateConfigDetailed`, and **pre-fills** the form
+  (never auto-saves). Labeled "drafted by your local model — review before saving" (honest-
+  uncertainty §1.2); the prompt forbids secrets; the call inherits LMStudio loopback/allowRemote.
+- **Chat header + empty state + error banner (P0-3).** `chatPanel.ts` shows the active model + a
+  `charts-green`/`errorForeground` connection dot, an empty state with clickable example prompts,
+  and a dismissible inline error banner. `ChatSession` answers a `requestStatus` message via
+  `LMStudioApi.checkConnected()`; all text via `textContent`.
+- **Status bar (P0-4).** Only the model/connection status item remains (the redundant "BrainStrom
+  Refresh" item was removed); "sense + refresh" stays on `lmstudio.senseLocalModels`.
+- **Enforced invariants (P3-9).** `src/test/webviewInvariants.test.ts` fails the build on a hex/rgb
+  literal (except the one popover tint), an `innerHTML`, or a missing CSP / non-empty
+  `localResourceRoots` in any webview — so §3/§11 are checked, not just documented.
+
 ## 7. The Live Board section model
 
-`brainstormViewProvider.ts` is a streaming **append-only log**, intentionally minimal
-(CONSTITUTION T5/§8.6 — "group-grain + phase-grain, not per-seat, not live σ_SI").
+`brainstormViewProvider.ts` is a **structured board** that updates stable sections in place as
+group-grain and phase-grain events stream from the in-process engine (CONSTITUTION T5/§8.6 —
+"group-grain + phase-grain, not per-seat, not live σ_SI"). Events arrive via `postEvent(event)`
+→ `postMessage`; the webview reads `kind = params.kind` (falling back to `method` minus the
+`event/` prefix) and dispatches on it.
 
-- **Empty state (`#empty`).** Shown until the first event arrives; gives the literal two
-  steps (1. run *BrainStrom: Configure* via the Command Palette or the ⚙ title-bar button;
-  2. pick the 🧠 *Brainstorm Debate Model* in Chat and type a topic). Hidden on first
-  message.
-- **Event rows (`.ev`).** Each posted `EngineEvent` becomes one row with a bottom divider:
-  a bold **kind** label (`m.method`, e.g. `event/group.start` · `group.phase` ·
-  `group.interim` · `group.error`) in `textLink-foreground`, followed by a wrapped
-  **payload** (`JSON.stringify(m.params)`) in `descriptionForeground`. Both via
-  `textContent`.
-- **Streaming discipline.** Only group-grain and phase-grain events appear here; the board
-  **never** renders draft report content, scribe reasoning, secrets, or per-seat
-  micro-progress. The final report is delivered as the closing chat response + saved
-  Markdown, not on the board.
-- **Live region.** The log container is `role="log" aria-live="polite"` so new events are
-  announced to assistive tech without stealing focus.
+- **Empty state (`#empty`).** Shown until the first event; gives the literal two steps
+  (1. run *BrainStrom: Configure* via the Command Palette or the ⚙ title-bar button;
+  2. pick the 🧠 *Brainstorm Debate Model* in Chat and type a topic). Hidden on first activate.
+- **Plan section (`#plan-section`).** From `decompose.points`: each knowledge point is a row
+  (`.point` — id + text + optional `[kind]`), and the dependency edges render as a
+  `src --kind--> dst` block (`#plan-edges`, `pre-wrap`). All via `textContent`.
+- **Groups section (`#groups-section`).** One **card** per `group_id`, created once by
+  `ensureCard(groupId)` and updated in place — never appended twice. A card has a head
+  (`.card-id` + a status **badge**: `running` → `charts-blue`, `done` → `charts-green`,
+  `error` → `errorForeground`), the point, a phase line (`group.start` / `group.phase`), and on
+  `group.interim` a summary plus a metrics row: validated / candidate counts, and σ / composite
+  **only if present**. σ is the group's interim diversity figure, **never** labeled a quality
+  score (§1.2).
+- **Footer (`#footer-section`).** Errors (`group.error`, injection rejections) as `.err-row`,
+  a one-line budget summary on a `budget` event, and a neutral status line on aggregate
+  completion.
+- **Unknown-kind fallback (`#log-section`, "Other events").** Any unrecognized kind, or any
+  event that throws while rendering, drops to a `role="log" aria-live="polite"` row
+  (kind + `asText(payload)`) so nothing is silently lost.
+- **Safety.** Every value is coerced with `asText()` and inserted via `textContent` /
+  `createElement` — never `innerHTML`; CSP is `default-src 'none'` with a per-render nonce; a
+  `try/catch` around dispatch guarantees a malformed event can never break the board.
 
-**Rule when extending the board** (e.g. the deferred richer DAG view, P2-4): keep it
-append-only and honest, keep every model-derived string `textContent`-rendered, and do not
-introduce live quality/σ_SI scoring.
+**Rule when extending the board:** keep it group/phase-grain and honest — update cards in place
+(keyed by `group_id`), render every model-derived string via `textContent`, route unknown kinds
+to the fallback log rather than dropping them, and do **not** introduce per-seat micro-progress
+or a live quality/σ_SI score.
 
 ---
 

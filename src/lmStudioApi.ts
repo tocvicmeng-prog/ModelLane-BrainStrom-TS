@@ -124,6 +124,21 @@ export class LMStudioApi {
     return this.modelId;
   }
 
+  /** Lightweight connection probe for the chat header: lists models and reports the active
+   *  model + reachability. Never throws — a failure returns connected:false + a short reason
+   *  (no URL/credentials leaked). */
+  async checkConnected(signal?: AbortSignal): Promise<{ model: string; connected: boolean; error?: string }> {
+    const configured = this.modelId;
+    try {
+      const models = await this.listModels(signal);
+      const active = configured || models.find(m => m.loaded)?.id || models[0]?.id || 'auto-detect';
+      return { model: active, connected: true };
+    } catch (err: any) {
+      const msg = (err && err.message ? String(err.message) : 'server unreachable').slice(0, 140);
+      return { model: configured || 'auto-detect', connected: false, error: msg };
+    }
+  }
+
   cancelRequest() {
     for (const controller of this.abortControllers) {
       controller.abort();

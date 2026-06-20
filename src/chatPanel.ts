@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { LMStudioApi } from './lmStudioApi';
 import { ChatSession } from './chatSession';
+import { nonce as genNonce } from './webview/theme';
 
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
@@ -72,17 +73,43 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .thinking.active { display: block; }
 .thinking::after { content: ''; animation: dots 1.5s steps(4, end) infinite; }
 @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+#header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+#header-status { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+#status-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--vscode-descriptionForeground); }
+#status-dot.connected { background: var(--vscode-charts-green); }
+#status-dot.disconnected { background: var(--vscode-errorForeground); }
+#model-name { color: var(--vscode-descriptionForeground); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#error-banner { display: none; align-items: center; gap: 8px; margin: 8px 12px 0; padding: 8px 10px; border-radius: 6px; background: var(--vscode-inputValidation-errorBackground, var(--vscode-editor-inactiveSelectionBackground)); border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); }
+#error-banner.visible { display: flex; }
+#error-text { flex: 1; color: var(--vscode-errorForeground); font-size: 12px; word-break: break-word; }
+#error-close { background: none; border: none; color: var(--vscode-errorForeground); cursor: pointer; padding: 2px 6px; font-size: 13px; }
+#empty-state { display: none; flex: 1; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 6px; }
+#empty-state.visible { display: flex; }
+#empty-title { font-size: 14px; color: var(--vscode-foreground); }
+#empty-sub { font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 8px; }
+#example-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.example-chip { padding: 6px 10px; border: 1px solid var(--vscode-panel-border); border-radius: 14px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); cursor: pointer; font-size: 12px; }
+.example-chip:hover { background: var(--vscode-button-secondaryHoverBackground); }
 </style>
 </head>
 <body>
 <div id="header">
-  <h1>ModelLane</h1>
+  <div id="header-left">
+    <h1>ModelLane</h1>
+    <div id="header-status"><span id="status-dot" class="unknown"></span><span id="model-name"></span></div>
+  </div>
   <div id="header-actions">
     <button id="new-chat-btn" title="New Chat">+</button>
     <button id="cancel-btn" title="Cancel">X</button>
   </div>
 </div>
+<div id="error-banner"><span id="error-text"></span><button id="error-close" title="Dismiss">X</button></div>
 <div id="messages"></div>
+<div id="empty-state">
+  <div id="empty-title">Chat with your local model</div>
+  <div id="empty-sub">Pick a model in the status bar, then try:</div>
+  <div id="example-chips"></div>
+</div>
 <div id="thinking" class="thinking">Thinking</div>
 <div id="input-area">
   <textarea id="input" placeholder="Ask ModelLane..." rows="1"></textarea>
@@ -99,6 +126,13 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
   const thinking = document.getElementById('thinking');
   const cancelBtn = document.getElementById('cancel-btn');
   const newChatBtn = document.getElementById('new-chat-btn');
+  const emptyState = document.getElementById('empty-state');
+  const exampleChips = document.getElementById('example-chips');
+  const statusDot = document.getElementById('status-dot');
+  const modelName = document.getElementById('model-name');
+  const errorBanner = document.getElementById('error-banner');
+  const errorText = document.getElementById('error-text');
+  const errorClose = document.getElementById('error-close');
   let isStreaming = false;
   let agentMode = false;
 
@@ -123,6 +157,27 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
     agentToggle.classList.toggle('active', agentMode);
     agentToggle.setAttribute('aria-pressed', String(agentMode));
   };
+
+  function renderEmptyState() {
+    const empty = messages.children.length === 0;
+    emptyState.classList.toggle('visible', empty);
+    messages.style.display = empty ? 'none' : 'flex';
+  }
+  ['Explain a code snippet', 'Write unit tests for a function', 'Refactor a piece of code for readability'].forEach(function(ex) {
+    const chip = document.createElement('button');
+    chip.className = 'example-chip';
+    chip.textContent = ex;
+    chip.onclick = function() {
+      input.value = ex;
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+      input.focus();
+    };
+    exampleChips.appendChild(chip);
+  });
+  errorClose.onclick = function() { errorBanner.classList.remove('visible'); };
+  renderEmptyState();
+  vscode.postMessage({ type: 'requestStatus' });
 
   window.addEventListener('message', function(e) {
     const msg = e.data;
@@ -154,6 +209,19 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
         break;
       case 'clearChat':
         messages.replaceChildren();
+        renderEmptyState();
+        break;
+      case 'status':
+        modelName.textContent = msg.model || '';
+        modelName.title = msg.model || '';
+        statusDot.className = msg.connected ? 'connected' : 'disconnected';
+        statusDot.title = msg.connected ? ('Connected · ' + (msg.model || '')) : 'Disconnected';
+        if (msg.error) {
+          errorText.textContent = 'Cannot reach the model server: ' + msg.error;
+          errorBanner.classList.add('visible');
+        } else {
+          errorBanner.classList.remove('visible');
+        }
         break;
     }
   });
@@ -163,6 +231,7 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
     div.className = 'msg ' + role;
     renderMessage(div, content);
     messages.appendChild(div);
+    renderEmptyState();
     div.scrollIntoView({ behavior: 'smooth' });
   }
 
@@ -242,10 +311,5 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 }
 
 export function getNonce(): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let nonce = '';
-  for (let i = 0; i < 32; i++) {
-    nonce += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
-  }
-  return nonce;
+  return genNonce();
 }

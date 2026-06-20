@@ -39,7 +39,16 @@ export class ChatSession {
         this._history = [];
         this._post({ type: 'clearChat' });
         break;
+      case 'requestStatus':
+        await this._postStatus();
+        break;
     }
+  }
+
+  /** Probe the local model endpoint and push a status update to the webview header. */
+  private async _postStatus(): Promise<void> {
+    const s = await this._api.checkConnected();
+    this._post({ type: 'status', model: s.model, connected: s.connected, error: s.error });
   }
 
   private async _handleSend(text: string, agentMode: boolean): Promise<void> {
@@ -53,6 +62,7 @@ export class ChatSession {
     } catch (err: any) {
       this._post({ type: 'hideThinking' });
       this._post({ type: 'addMessage', role: 'assistant', content: `**Error:** ${err.message}` });
+      void this._postStatus();
     }
   }
 

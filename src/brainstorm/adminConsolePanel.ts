@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
-import { BrainstormConfig, ConnectorRegistry, defaultConfig } from './connectorRegistry';
-import { validateConfig } from './configValidation';
+import { BrainstormConfig, ConnectorDef, ConnectorRegistry, defaultConfig } from './connectorRegistry';
+import { validateConfigDetailed } from './configValidation';
+import { probeConnector } from '../orchestrator/connectors/probe';
+import { LMStudioApi } from '../lmStudioApi';
 import { SecretsStore } from './secrets';
+import { nonce as genNonce, SWITCH_CSS } from '../webview/theme';
 
 /** A VS Code setting surfaced (and made switchable) inside the configure panel, so every
  *  adjustable option lives in one place. `type: 'bool'` renders as an on/off switch. */
@@ -52,6 +55,28 @@ const SETTINGS_SPEC: SettingSpec[] = [
     help: 'Llamafile OpenAI-compatible base URL.' },
 ];
 
+/** System prompt for the AI draft-config feature (P2-7). The model must emit ONE JSON object
+ *  in the BrainstormConfig shape; it is validated by validateConfigDetailed before use. */
+const DRAFT_SYSTEM_PROMPT = [
+  'You configure a multi-LLM debate tool. Read the user request and emit ONE JSON object',
+  '(no prose, no markdown fences) describing the configuration. Schema:',
+  '{',
+  '  "connectors": [ { "id": "<short unique id>", "kind": "openai-compatible" | "openai" | "anthropic" | "cli", "baseUrl": "<url>" } ],',
+  '  "seats": {',
+  '    "agent_a": { "connectorId": "<an id from connectors>", "model": "<model name>", "family": "debater-a", "persona": "<short role>", "temperature": 0.2 },',
+  '    "agent_b": { "connectorId": "...", "model": "...", "family": "debater-b", "persona": "...", "temperature": 0.9 },',
+  '    "judge":   { "connectorId": "...", "model": "...", "family": "moderator", "persona": "...", "temperature": 0.4 }',
+  '  },',
+  '  "mode": "mixed" | "critical" | "heuristic" | "game-theoretic",',
+  '  "maxPoints": <integer between 2 and 20>,',
+  '  "researchEnabled": false',
+  '}',
+  'Rules: every seat connectorId MUST equal one of the connectors ids. For a local model use',
+  'kind "openai-compatible" and baseUrl "http://localhost:1234/v1". For OpenAI use kind "openai"',
+  'and baseUrl "https://api.openai.com/v1"; for Anthropic use kind "anthropic" and baseUrl',
+  '"https://api.anthropic.com". NEVER include API keys, tokens, or secrets. Output ONLY the JSON object.',
+].join('\n');
+
 /**
  * adminConsolePanel.ts (N19) — the secure multi-LLM configuration surface.
  *
@@ -98,10 +123,13 @@ export class AdminConsolePanel {
         return;
       }
       // Full schema validation before persisting (audit F8): reject unknown connector
-      // kinds, empty ids, invalid URLs/prompt modes, negative limits, missing seats.
-      const problems = validateConfig(cfg);
+      // kinds, empty ids, invalid URLs/prompt modes, negative limits, missing seats. The
+      // structured problems go to the webview for INLINE per-field display (P0-2); an empty
+      // list clears any previous inline errors.
+      const problems = validateConfigDetailed(cfg);
+      this.panel?.webview.postMessage({ type: 'validationFailed', problems });
       if (problems.length > 0) {
-        vscode.window.showErrorMessage('BrainStrom: configuration not saved — ' + problems.slice(0, 6).join('; '));
+        vscode.window.showErrorMessage('BrainStrom: configuration not saved — ' + problems.slice(0, 4).map(p => p.message).join('; '));
         return;
       }
       await this.registry.setConfig(cfg);
@@ -118,6 +146,10 @@ export class AdminConsolePanel {
         await this.secrets.setKey(id, key);
         vscode.window.showInformationMessage(`API key stored for connector "${id}".`);
       }
+    } else if (msg.type === 'testConnector') {
+      await this.testConnector(msg);
+    } else if (msg.type === 'draftConfig') {
+      await this.draftConfig(msg);
     } else if (msg.type === 'pickSkillFile') {
       await this.pickSkillFile(msg);
     } else if (msg.type === 'reset') {
@@ -157,6 +189,68 @@ export class AdminConsolePanel {
     this.panel?.webview.postMessage({ type: 'skillFileLoaded', scope, key, name, content });
   }
 
+  /** Probe a connector's reachability/auth (reusing the egress guard) and report to the
+   *  webview dot + a toast. The key is read from SecretStorage here; the webview never sees it. */
+  private async testConnector(msg: any): Promise<void> {
+    const id = String(msg?.connectorId || '').trim();
+    const cfg = msg?.config as { connectors?: ConnectorDef[] } | undefined;
+    const def = cfg?.connectors?.find(c => c && c.id === id);
+    if (!id || !def) {
+      this.panel?.webview.postMessage({ type: 'testResult', connectorId: id, ok: false, detail: 'connector not found' });
+      return;
+    }
+    const apiKey = await this.secrets.getKey(id);
+    const allowRemote = vscode.workspace.getConfiguration().get<boolean>('brainstrom.allowRemote', false);
+    const result = await probeConnector(def, apiKey ?? null, allowRemote);
+    this.panel?.webview.postMessage({ type: 'testResult', connectorId: id, ok: result.ok, detail: result.detail });
+    const note = `Connector "${id}": ${result.detail}`;
+    if (result.ok) { vscode.window.showInformationMessage(note); } else { vscode.window.showWarningMessage(note); }
+  }
+
+  /** AI-draft a configuration from a plain-English description using a configured LOCAL model,
+   *  validate it, and post it back to PRE-FILL the form (the user still reviews + Saves). */
+  private async draftConfig(msg: any): Promise<void> {
+    const desc = String(msg?.description || '').trim();
+    if (!desc) return;
+    try {
+      const draft = await this.draftConfigFromDescription(desc);
+      this.panel?.webview.postMessage({
+        type: 'configDraftReady', config: draft,
+        message: 'Drafted by your local model — review every connector, model, and persona, set any API keys, then Save.',
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.panel?.webview.postMessage({ type: 'configDraftError', detail });
+    }
+  }
+
+  private async draftConfigFromDescription(description: string): Promise<BrainstormConfig> {
+    const api = new LMStudioApi();
+    const messages = [
+      { role: 'system' as const, content: DRAFT_SYSTEM_PROMPT },
+      { role: 'user' as const, content: description },
+    ];
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; api.cancelRequest(); }, 30000);
+    let response: string;
+    try {
+      response = await api.chat(messages);
+    } catch (err) {
+      if (timedOut) throw new Error('the local model timed out (30s) — is a model loaded?');
+      throw new Error('could not reach the local model: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response || response.length > 8000) throw new Error('the model returned an empty or oversized response');
+    const match = response.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('no JSON object found in the model response');
+    let draft: any;
+    try { draft = JSON.parse(match[0]); } catch { throw new Error('the model response was not valid JSON'); }
+    const problems = validateConfigDetailed(draft);
+    if (problems.length > 0) throw new Error('drafted config was invalid (' + problems.slice(0, 3).map(p => p.message).join('; ') + ')');
+    return draft as BrainstormConfig;
+  }
+
   /** Current values of all centralized VS Code settings (injected into the webview). */
   private gatherSettings(): Record<string, unknown> {
     const cfg = vscode.workspace.getConfiguration();
@@ -191,7 +285,7 @@ export class AdminConsolePanel {
   }
 
   private html(cfg: BrainstormConfig): string {
-    const nonce = makeNonce();
+    const nonce = genNonce();
     const csp = `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';`;
     const cfgJson = JSON.stringify(cfg).replace(/</g, '\\u003c');   // safe to embed in <script>
     const settingsSpecJson = JSON.stringify(SETTINGS_SPEC).replace(/</g, '\\u003c');
@@ -232,6 +326,7 @@ export class AdminConsolePanel {
     .combo-select, .combo-input { width: 150px; }
     .combo-back { padding: 2px 6px; min-width: 22px; }
     .persona-row { display: inline-flex; align-items: center; gap: 4px; }
+    .attach-skill { padding: 1px 7px; line-height: 1.4; }
     #help-pop { position: absolute; display: none; max-width: 340px; padding: 8px 10px; z-index: 50;
             background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
             color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
@@ -244,52 +339,132 @@ export class AdminConsolePanel {
             border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 0.8em; }
     .chip .x { cursor: pointer; font-weight: bold; opacity: 0.8; }
     .chip .x:hover { opacity: 1; }
-    .switch { position: relative; display: inline-block; width: 34px; height: 18px; }
-    .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-    .switch .slider { position: absolute; inset: 0; cursor: pointer; border-radius: 18px;
-            background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); transition: background .15s; }
-    .switch .slider::before { content: ''; position: absolute; width: 12px; height: 12px; left: 2px; top: 2px;
-            border-radius: 50%; background: var(--vscode-descriptionForeground); transition: transform .15s, background .15s; }
-    .switch input:checked + .slider { background: var(--vscode-button-background); border-color: var(--vscode-button-background); }
-    .switch input:checked + .slider::before { transform: translateX(16px); background: var(--vscode-button-foreground); }
-    .switch input:focus-visible + .slider { outline: 1px solid var(--vscode-focusBorder); }
+    .c-status { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; margin-left: 2px;
+            background: var(--vscode-descriptionForeground); vertical-align: middle; }
+    .c-status.testing { background: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground)); }
+    .c-status.ok { background: var(--vscode-charts-green); }
+    .c-status.fail { background: var(--vscode-errorForeground); }
+    .valbanner { display: none; margin: 8px 14px 0; padding: 8px 10px; border-radius: 4px; font-size: 0.85em;
+            background: var(--vscode-inputValidation-errorBackground, var(--vscode-editor-inactiveSelectionBackground));
+            border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+            color: var(--vscode-errorForeground); }
+    .valbanner.show { display: block; }
+    .field-error { border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)) !important; }
+    .error-hint { color: var(--vscode-errorForeground); font-size: 0.8em; margin-top: 2px; }
+${SWITCH_CSS}
     .set-input { width: 170px; } select.set-input { width: 178px; }
+
+    /* dashboard shell: section rail (left) + scrolling content + pinned save bar (bottom) */
+    html, body { height: 100%; }
+    body { padding: 0; display: flex; flex-direction: column; }
+    .shell { flex: 1; display: flex; min-height: 0; }
+    .rail { width: 152px; flex: none; overflow-y: auto; padding: 10px 8px; display: flex; flex-direction: column; gap: 2px;
+            border-right: 1px solid var(--vscode-panel-border); }
+    .rail-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left;
+            padding: 6px 9px; border: none; border-radius: 4px; background: transparent; cursor: pointer; font-size: 0.9em;
+            color: var(--vscode-descriptionForeground); }
+    .rail-item:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+    .rail-item.active { background: var(--vscode-list-activeSelectionBackground, var(--vscode-toolbar-hoverBackground));
+            color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground)); }
+    .rail-badge { font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+    .content { flex: 1; overflow-y: auto; padding: 12px 14px; }
+    .section[hidden] { display: none; }
+    .savebar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px;
+            border-top: 1px solid var(--vscode-panel-border); }
+    .savebar-actions { display: flex; gap: 8px; }
+    .dirty { display: none; align-items: center; gap: 6px; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+    .dirty.show { display: inline-flex; }
+    .dirty-dot { width: 8px; height: 8px; border-radius: 50%; flex: none;
+            background: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground)); }
+    /* setup overview */
+    .ov-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 6px; }
+    .ov-card { background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px 9px; }
+    .ov-role { font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+    .ov-line { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 0.9em; word-break: break-word; }
+    .ov-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    .ov-summary { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin: 8px 0 0; }
+    .ai-draft { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px 9px; margin: 6px 0 12px; }
+    .ai-row { display: flex; gap: 6px; margin-top: 4px; }
+    .ai-input { flex: 1; min-width: 0; }
+    .ai-note { font-size: 0.8em; color: var(--vscode-descriptionForeground); margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
+    .ai-note.err { color: var(--vscode-errorForeground); }
   </style>
 </head>
 <body>
-  <h2>BrainStrom — Configure debate connectors &amp; seats</h2>
-  <p class="hint">Connector kinds: <code>openai</code> / <code>anthropic</code> (remote APIs — need
-    <code>brainstrom.allowRemote</code> + a key), <code>openai-compatible</code> (local, e.g. LM Studio),
-    <code>cli</code> (drives a local <code>codex</code>/<code>claude</code> CLI via its own login). Keys are stored in the OS keychain.</p>
+  <div class="shell">
+    <nav class="rail" id="rail" aria-label="Configure sections">
+      <button class="rail-item active" data-sec="setup">Setup</button>
+      <button class="rail-item" data-sec="connectors">Connectors <span class="rail-badge" id="rail-conn"></span></button>
+      <button class="rail-item" data-sec="seats">Seats</button>
+      <button class="rail-item" data-sec="panel">Panel <span class="rail-badge" id="rail-panel"></span></button>
+      <button class="rail-item" data-sec="session">Session</button>
+      <button class="rail-item" data-sec="settings">Settings</button>
+    </nav>
+    <div class="content">
+      <section class="section" data-sec="setup">
+        <h2>Setup</h2>
+        <p class="hint">Your debate pipeline at a glance. Each seat maps to a connector you define under <b>Connectors</b>.
+          A green dot means the seat points at a defined connector and a model; amber means its connector id isn’t defined yet.
+          (This is a config-consistency check, not a live connection test.)</p>
+        <div class="ai-draft">
+          <span class="lbl">Draft from a description <span class="help" data-help="aidraft">?</span></span>
+          <div class="ai-row">
+            <input id="ai-desc" class="ai-input" placeholder="e.g. two local models debate critically, same model judges" />
+            <button id="ai-draft-btn" class="secondary">Draft with local model</button>
+          </div>
+          <div id="ai-note" class="ai-note"></div>
+        </div>
+        <div id="overview"></div>
+      </section>
 
-  <h3>Connectors <span class="help" data-help="connectors">?</span></h3>
-  <div id="connectors"></div>
-  <button id="addConnector" class="secondary">+ Add connector</button>
+      <section class="section" data-sec="connectors" hidden>
+        <h2>Connectors <span class="help" data-help="connectors">?</span></h2>
+        <p class="hint">Connector kinds: <code>openai</code> / <code>anthropic</code> (remote APIs — need
+          <code>brainstrom.allowRemote</code> + a key), <code>openai-compatible</code> (local, e.g. LM Studio),
+          <code>cli</code> (drives a local <code>codex</code>/<code>claude</code> CLI via its own login). Keys are stored in the OS keychain.</p>
+        <div id="connectors"></div>
+        <button id="addConnector" class="secondary">+ Add connector</button>
+      </section>
 
-  <h3>Seats <span class="help" data-help="seats">?</span></h3>
-  <p class="hint">Each seat references a connector id. agent_a / agent_b are the two debaters; judge is the moderator/referee/scribe.</p>
-  <div id="seats"></div>
+      <section class="section" data-sec="seats" hidden>
+        <h2>Seats <span class="help" data-help="seats">?</span></h2>
+        <p class="hint">Each seat references a connector id. agent_a / agent_b are the two debaters; judge is the moderator/referee/scribe.</p>
+        <div id="seats"></div>
+      </section>
 
-  <h3>Panel debaters (optional) <span class="help" data-help="debaters">?</span></h3>
-  <p class="hint">Add <b>3 or more</b> here to debate each knowledge point as an N-way <b>panel</b>. Fewer than 3 falls back to agent_a / agent_b.</p>
-  <div id="debaters"></div>
-  <button id="addDebater" class="secondary">+ Add debater</button>
+      <section class="section" data-sec="panel" hidden>
+        <h2>Panel debaters (optional) <span class="help" data-help="debaters">?</span></h2>
+        <p class="hint">Add <b>3 or more</b> here to debate each knowledge point as an N-way <b>panel</b>. Fewer than 3 falls back to agent_a / agent_b.</p>
+        <div id="debaters"></div>
+        <button id="addDebater" class="secondary">+ Add debater</button>
+      </section>
 
-  <h3>Session <span class="help" data-help="session">?</span></h3>
-  <div class="row">
-    <span class="fieldcol"><span class="lbl">mode <span class="help" data-help="mode">?</span></span><select id="mode"></select></span>
-    <span class="fieldcol"><span class="lbl">max points <span class="help" data-help="maxPoints">?</span></span><input id="maxPoints" class="num" type="number" min="2" max="20" /></span>
-    <span class="fieldcol"><span class="lbl">max total tokens <span class="help" data-help="maxTotalTokens">?</span></span><input id="maxTotalTokens" class="num" type="number" min="0" /></span>
-    <span class="fieldcol"><span class="lbl">research <span class="help" data-help="research">?</span></span><label class="switch"><input id="researchEnabled" type="checkbox" /><span class="slider"></span></label></span>
+      <section class="section" data-sec="session" hidden>
+        <h2>Session <span class="help" data-help="session">?</span></h2>
+        <div class="row">
+          <span class="fieldcol"><span class="lbl">mode <span class="help" data-help="mode">?</span></span><select id="mode"></select></span>
+          <span class="fieldcol"><span class="lbl">max points <span class="help" data-help="maxPoints">?</span></span><input id="maxPoints" class="num" type="number" min="2" max="20" /></span>
+          <span class="fieldcol"><span class="lbl">max total tokens <span class="help" data-help="maxTotalTokens">?</span></span><input id="maxTotalTokens" class="num" type="number" min="0" /></span>
+          <span class="fieldcol"><span class="lbl">research <span class="help" data-help="research">?</span></span><label class="switch"><input id="researchEnabled" type="checkbox" /><span class="slider"></span></label></span>
+        </div>
+      </section>
+
+      <section class="section" data-sec="settings" hidden>
+        <h2>Global settings <span class="help" data-help="settingsSection">?</span></h2>
+        <p class="hint">All ModelLane &amp; BrainStrom options in one place — saved to your VS Code user settings on <b>Save</b>. Boolean options are on/off switches.</p>
+        <div id="settings"></div>
+      </section>
+    </div>
   </div>
 
-  <h3>Global settings <span class="help" data-help="settingsSection">?</span></h3>
-  <p class="hint">All ModelLane &amp; BrainStrom options in one place — saved to your VS Code user settings on <b>Save</b>. Boolean options are on/off switches.</p>
-  <div id="settings"></div>
+  <div id="valbanner" class="valbanner"></div>
 
-  <div class="bar">
-    <button id="save">Save configuration</button>
-    <button id="reset" class="secondary">Reset to defaults</button>
+  <div class="savebar">
+    <span class="dirty" id="dirty"><span class="dirty-dot"></span> Unsaved changes</span>
+    <span class="savebar-actions">
+      <button id="save">Save configuration</button>
+      <button id="reset" class="secondary">Reset to defaults</button>
+    </span>
   </div>
 
   <div id="help-pop"></div>
@@ -437,7 +612,7 @@ export class AdminConsolePanel {
       conn: { t: 'Connector id', b: 'Pick a connector defined above (e.g. local), or choose Other… to type a custom id.\\nMust match a connector id exactly. Required.' },
       model: { t: 'Model', b: 'Pick a common model, or choose Other… to type any model name your connector serves (e.g. local-model, gpt-4o, claude-3-5-sonnet).' },
       family: { t: 'Model family', b: 'A short label for the model family (e.g. debater-a, moderator). Pick one or choose Other… for a custom value.\\nUsed to down-weight agreement between same-family models and to verify with a different family.' },
-      persona: { t: 'Persona', b: 'This seat\\u2019s role and instructions — sent to the model as its system prompt.\\n\\nType a short description, OR double-click the box to load a Markdown skill file (retrieval preferences, reasoning style, cognitive frameworks). Typed text and the skill file are combined.' },
+      persona: { t: 'Persona', b: 'This seat\\u2019s role and instructions — sent to the model as its system prompt.\\n\\nType a short description, OR use the attach (\\uD83D\\uDCCE) button — or double-click the box — to load a Markdown skill file (retrieval preferences, reasoning style, cognitive frameworks). Typed text and the skill file are combined.' },
       temp: { t: 'Temperature', b: 'Sampling temperature 0–2 (blank = 0.7).\\nLower = focused / deterministic (good for a critic or judge); higher = exploratory / diverse (good for ideation).' },
       debaters: { t: 'Panel debaters', b: 'Optional. Add 3 or more debaters to run each knowledge point as an N-way panel.\\nFewer than 3 falls back to agent_a / agent_b.\\nEach debater also takes a persona / skill file.' },
       skill: { t: 'Skill files', b: 'A skill file is a Markdown (.md / .txt) file describing how this persona should think and search — e.g. prefer academic databases, reason from first principles, use analogical or reverse thinking, a specific mathematical method.\\n\\nOptional simple key: value front-matter at the top is rendered as directives, followed by the body.\\nDouble-click the persona box to load one. Stored in the extension config (not the keychain) — do not put secrets in a skill file.' },
@@ -448,6 +623,7 @@ export class AdminConsolePanel {
       research: { t: 'Research', b: 'Allow debaters to fetch external sources (Wikipedia / Semantic Scholar / etc.) during the debate.\\nOff by default for privacy — your topic is sent to those services when enabled.' },
       'c-filetools': { t: 'CLI file tools', b: '(cli only) Allow the CLI to use its file-writing tools. Off by default — the CLI runs single-shot in a bounded temp dir.' },
       settingsSection: { t: 'Global settings', b: 'Every adjustable ModelLane & BrainStrom option in one place. Changes are written to your VS Code user settings when you Save. Boolean options are on/off switches.' },
+      aidraft: { t: 'Draft from a description', b: 'Describe the debate you want in plain English; a configured LOCAL model drafts the connectors, seats, models, and personas and fills in the form below.\\n\\nNothing is saved automatically — review every field (and set any API keys) before you Save. The draft is validated first, so an invalid suggestion is rejected with a reason. No data leaves your machine beyond your local model endpoint.' },
     };
     for (const s of SETTINGS_SPEC) HELP['set:' + s.key] = { t: s.label, b: s.help };
     const helpPop = document.getElementById('help-pop');
@@ -493,11 +669,18 @@ export class AdminConsolePanel {
         field('kind', kindSel, 'c-kind'),
         field('base url', el('input', { class: 'c-baseurl base', value: c.baseUrl || '', placeholder: 'http://localhost:1234/v1' }), 'c-baseurl'),
         cli,
+        el('button', { class: 'secondary c-test', title: 'Test reachability of this connector' }, ['Test']),
+        el('span', { class: 'c-status', title: 'not tested' }, []),
         el('button', { class: 'secondary c-setkey' }, ['Set API key…']),
         el('button', { class: 'secondary c-remove' }, ['Remove']),
       ]);
       row.querySelector('.c-setkey').addEventListener('click', () =>
         vscodeApi.postMessage({ type: 'setKey', connectorId: row.querySelector('.c-id').value }));
+      row.querySelector('.c-test').addEventListener('click', () => {
+        const dot = row.querySelector('.c-status');
+        dot.className = 'c-status testing'; dot.title = 'testing…';
+        vscodeApi.postMessage({ type: 'testConnector', connectorId: row.querySelector('.c-id').value.trim(), config: { connectors: readConnectors() } });
+      });
       row.querySelector('.c-remove').addEventListener('click', () => row.remove());
       setTimeout(toggleCli, 0);
       return row;
@@ -527,18 +710,18 @@ export class AdminConsolePanel {
     }
     function personaField(targetId, personaValue, skill, cls) {
       const input = el('input', { class: cls + ' persona', value: personaValue || '',
-        placeholder: 'short role text — double-click to load a skill file', title: 'Double-click to load a skill file' });
-      input.addEventListener('dblclick', () => {
-        const parts = splitTarget(targetId);
-        vscodeApi.postMessage({ type: 'pickSkillFile', scope: parts[0], key: parts[1] });
-      });
+        placeholder: 'short role text — or attach a skill file', title: 'Type a role, or use the attach button (or double-click) to load a skill file' });
+      const pick = () => { const parts = splitTarget(targetId); vscodeApi.postMessage({ type: 'pickSkillFile', scope: parts[0], key: parts[1] }); };
+      input.addEventListener('dblclick', pick);
+      const attach = el('button', { class: 'secondary attach-skill', type: 'button', title: 'Load a Markdown skill file (.md / .txt)' }, ['\\uD83D\\uDCCE']);
+      attach.addEventListener('click', pick);
       const chipBox = el('span', { class: 'chip-box' }, []);
       CHIPS.set(targetId, chipBox);
       if (skill && skill.name) SKILLS.set(targetId, { name: String(skill.name), content: String(skill.content || '') });
       renderChip(targetId);
       return el('span', { class: 'fieldcol' }, [
         el('span', { class: 'lbl' }, ['persona', helpSpan('persona')]),
-        el('span', { class: 'persona-row' }, [input, chipBox]),
+        el('span', { class: 'persona-row' }, [input, attach, chipBox]),
       ]);
     }
 
@@ -603,6 +786,14 @@ export class AdminConsolePanel {
     document.getElementById('addConnector').addEventListener('click', () => connectorsBox.appendChild(connectorRow()));
     document.getElementById('addDebater').addEventListener('click', () => debatersBox.appendChild(debaterRow()));
     document.getElementById('reset').addEventListener('click', () => vscodeApi.postMessage({ type: 'reset' }));
+    document.getElementById('ai-draft-btn').addEventListener('click', () => {
+      const desc = document.getElementById('ai-desc').value.trim();
+      const note = document.getElementById('ai-note');
+      if (!desc) { note.className = 'ai-note err'; note.textContent = 'Type a short description first.'; return; }
+      note.className = 'ai-note'; note.textContent = 'Drafting with your local model…';
+      document.getElementById('ai-draft-btn').disabled = true;
+      vscodeApi.postMessage({ type: 'draftConfig', description: desc });
+    });
 
     // ---- serialize on save ----
     function readConnectors() {
@@ -656,27 +847,186 @@ export class AdminConsolePanel {
       const mt = parseInt(document.getElementById('maxTotalTokens').value, 10);
       if (mt) cfg.maxTotalTokens = mt;
       vscodeApi.postMessage({ type: 'save', config: cfg, settings: readSettings() });
+      setDirty(false);
     });
+
+    // ---- dashboard shell: section rail + unsaved-changes tracking + Setup overview ----
+    function showSection(sec) {
+      document.querySelectorAll('.section').forEach(s => { s.hidden = (s.getAttribute('data-sec') !== sec); });
+      document.querySelectorAll('.rail-item').forEach(b => b.classList.toggle('active', b.getAttribute('data-sec') === sec));
+      if (sec === 'setup') buildOverview();
+    }
+    document.getElementById('rail').addEventListener('click', (e) => {
+      const b = e.target && e.target.closest ? e.target.closest('.rail-item') : null;
+      if (b) showSection(b.getAttribute('data-sec'));
+    });
+
+    let DIRTY = false;
+    function setDirty(v) { DIRTY = v; document.getElementById('dirty').classList.toggle('show', !!v); }
+    const contentEl = document.querySelector('.content');
+    contentEl.addEventListener('input', () => { setDirty(true); clearValidation(); });
+    contentEl.addEventListener('change', () => { setDirty(true); clearValidation(); });
+    contentEl.addEventListener('click', (e) => {              // structural edits (add / remove / chip ✕)
+      const t = e.target;
+      if (!t || !t.classList) return;
+      if (t.id === 'addConnector' || t.id === 'addDebater' ||
+          t.classList.contains('c-remove') || t.classList.contains('d-remove') || t.classList.contains('x')) {
+        setDirty(true);
+      }
+    });
+
+    function ovDot(state) {
+      const d = el('span', { class: 'ov-dot', title: state === 'ok' ? 'connector + model set' : (state === 'warn' ? 'connector id not defined under Connectors' : 'no connector chosen') }, []);
+      d.style.background = state === 'ok' ? 'var(--vscode-charts-green)'
+        : (state === 'warn' ? 'var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground))' : 'var(--vscode-errorForeground)');
+      return d;
+    }
+    function buildOverview() {
+      const box = document.getElementById('overview');
+      if (!box) return;
+      box.replaceChildren();
+      const idSet = new Set([...document.querySelectorAll('.connector-row .c-id')].map(i => i.value.trim()).filter(Boolean));
+      const grid = el('div', { class: 'ov-grid' }, []);
+      ['agent_a', 'agent_b', 'judge'].forEach(name => {
+        const root = document.getElementById('seat-' + name);
+        const conn = root ? root.querySelector('.s-conn').value.trim() : '';
+        const model = root ? root.querySelector('.s-model').value.trim() : '';
+        const state = (conn && idSet.has(conn) && model) ? 'ok' : (conn ? 'warn' : 'err');
+        const line = el('span', { class: 'ov-line' }, [ovDot(state)]);
+        line.appendChild(document.createTextNode((conn || 'no connector') + (model ? ' · ' + model : '')));
+        grid.appendChild(el('div', { class: 'ov-card' }, [el('div', { class: 'ov-role' }, [name]), line]));
+      });
+      box.appendChild(grid);
+      const mode = document.getElementById('mode').value;
+      const pts = document.getElementById('maxPoints').value || '5';
+      const research = document.getElementById('researchEnabled').checked ? 'on' : 'off';
+      const debCount = document.querySelectorAll('.debater-row').length;
+      const parts = [mode + ' mode', pts + ' points', 'research ' + research, idSet.size + ' connector' + (idSet.size === 1 ? '' : 's')];
+      if (debCount >= 2) parts.push(debCount + '-debater panel');
+      box.appendChild(el('p', { class: 'ov-summary' }, [parts.join(' · ')]));
+      const rc = document.getElementById('rail-conn'); if (rc) rc.textContent = idSet.size ? String(idSet.size) : '';
+      const rp = document.getElementById('rail-panel'); if (rp) rp.textContent = debCount ? String(debCount) : '';
+    }
+    buildOverview();
+
+    // ---- inline per-field validation (structured problems from validateConfigDetailed) ----
+    function sectionForField(field) {
+      if (field.indexOf('connectors') === 0) return 'connectors';
+      if (field.indexOf('seats.debaters') === 0) return 'panel';
+      if (field.indexOf('seats') === 0) return 'seats';
+      if (field === 'mode' || field === 'maxPoints' || field === 'maxTotalTokens') return 'session';
+      return null;
+    }
+    function idConnectorRows() {
+      return [...document.querySelectorAll('.connector-row')].filter(r => r.querySelector('.c-id').value.trim());
+    }
+    function valueDebaterRows() {   // same survivor filter as readDebaters() so indices align
+      return [...document.querySelectorAll('.debater-row')].filter(r => r.querySelector('.d-conn').value.trim() && r.querySelector('.d-model').value.trim());
+    }
+    function inputForField(field) {
+      let m = field.match(/^seats\\.(agent_a|agent_b|judge)\\.(connectorId|model)$/);
+      if (m) { const root = document.getElementById('seat-' + m[1]); return root ? root.querySelector(m[2] === 'connectorId' ? '.s-conn' : '.s-model') : null; }
+      m = field.match(/^seats\\.debaters\\[(\\d+)\\]\\.(connectorId|model)$/);
+      if (m) { const r = valueDebaterRows()[+m[1]]; return r ? r.querySelector(m[2] === 'connectorId' ? '.d-conn' : '.d-model') : null; }
+      m = field.match(/^connectors\\[(\\d+)\\]\\.(id|kind|baseUrl|command|promptVia|timeout)$/);
+      if (m) {
+        const r = idConnectorRows()[+m[1]]; if (!r) return null;
+        const cls = { id: '.c-id', kind: '.c-kind', baseUrl: '.c-baseurl', command: '.c-command', promptVia: '.c-promptvia', timeout: '.c-timeout' }[m[2]];
+        return cls ? r.querySelector(cls) : null;
+      }
+      if (field === 'mode') return document.getElementById('mode');
+      if (field === 'maxPoints') return document.getElementById('maxPoints');
+      if (field === 'maxTotalTokens') return document.getElementById('maxTotalTokens');
+      return null;
+    }
+    function clearValidation() {
+      document.querySelectorAll('.error-hint').forEach(n => n.remove());
+      document.querySelectorAll('.field-error').forEach(n => n.classList.remove('field-error'));
+      const vb = document.getElementById('valbanner'); vb.classList.remove('show'); vb.replaceChildren();
+    }
+    function displayValidation(problems) {
+      clearValidation();
+      if (!problems || !problems.length) return;
+      const unmapped = [];
+      let firstSection = null;
+      for (const p of problems) {
+        const inp = inputForField(p.field || '');
+        if (inp) {
+          const visible = (inp.type === 'hidden' && inp.parentElement) ? (inp.parentElement.querySelector('.combo-ui') || inp) : inp;
+          if (visible && visible.classList) visible.classList.add('field-error');
+          const holder = inp.closest('.fieldcol') || inp.parentElement || inp;
+          holder.appendChild(el('div', { class: 'error-hint' }, [p.message]));
+          if (!firstSection) firstSection = sectionForField(p.field);
+        } else {
+          unmapped.push(p.message);
+        }
+      }
+      const vb = document.getElementById('valbanner');
+      vb.appendChild(el('div', {}, [problems.length + ' issue' + (problems.length === 1 ? '' : 's') + ' to fix before saving:']));
+      for (const um of unmapped) vb.appendChild(el('div', {}, ['\\u2022 ' + um]));
+      vb.classList.add('show');
+      if (firstSection) showSection(firstSection);
+    }
+
+    function applyDraftConfig(cfg) {
+      if (!cfg || typeof cfg !== 'object') return;
+      SKILLS.clear(); CHIPS.clear();
+      if (Array.isArray(cfg.connectors)) {
+        connectorsBox.replaceChildren();
+        cfg.connectors.forEach(c => connectorsBox.appendChild(connectorRow(c)));
+      }
+      if (cfg.seats && typeof cfg.seats === 'object') {
+        seatsBox.replaceChildren();
+        seatsBox.appendChild(seatBlock('agent_a', cfg.seats.agent_a));
+        seatsBox.appendChild(seatBlock('agent_b', cfg.seats.agent_b));
+        seatsBox.appendChild(seatBlock('judge', cfg.seats.judge));
+        debatersBox.replaceChildren();
+        (cfg.seats.debaters || []).forEach(d => debatersBox.appendChild(debaterRow(d)));
+      }
+      if (cfg.mode) document.getElementById('mode').value = cfg.mode;
+      if (cfg.maxPoints) document.getElementById('maxPoints').value = cfg.maxPoints;
+      document.getElementById('maxTotalTokens').value = (typeof cfg.maxTotalTokens === 'number') ? cfg.maxTotalTokens : '';
+      if (typeof cfg.researchEnabled === 'boolean') document.getElementById('researchEnabled').checked = cfg.researchEnabled;
+      clearValidation();
+      setDirty(true);
+      buildOverview();
+    }
 
     // ---- receive a loaded skill file from the extension (pickSkillFile round-trip) ----
     window.addEventListener('message', (e) => {
       const m = e.data || {};
+      if (m.type === 'validationFailed') { displayValidation(m.problems || []); return; }
+      if (m.type === 'configDraftReady') {
+        applyDraftConfig(m.config);
+        const note = document.getElementById('ai-note'); note.className = 'ai-note'; note.textContent = m.message || 'Drafted — review before saving.';
+        document.getElementById('ai-draft-btn').disabled = false;
+        showSection('connectors');
+        return;
+      }
+      if (m.type === 'configDraftError') {
+        const note = document.getElementById('ai-note'); note.className = 'ai-note err'; note.textContent = 'Draft failed: ' + (m.detail || 'unknown error');
+        document.getElementById('ai-draft-btn').disabled = false;
+        return;
+      }
+      if (m.type === 'testResult' && m.connectorId) {
+        const row = [...document.querySelectorAll('.connector-row')].find(r => r.querySelector('.c-id').value.trim() === m.connectorId);
+        if (row) {
+          const dot = row.querySelector('.c-status');
+          dot.className = 'c-status ' + (m.ok ? 'ok' : 'fail');
+          dot.title = String(m.detail || (m.ok ? 'reachable' : 'failed'));
+        }
+        return;
+      }
       if (m.type === 'skillFileLoaded' && m.scope && m.key !== undefined && m.name) {
         const targetId = m.scope + ':' + m.key;
         if (!CHIPS.has(targetId)) return;
         SKILLS.set(targetId, { name: String(m.name), content: String(m.content || '') });
         renderChip(targetId);
+        setDirty(true);
       }
     });
   </script>
 </body>
 </html>`;
   }
-}
-
-function makeNonce(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let out = '';
-  for (let i = 0; i < 32; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
-  return out;
 }
