@@ -97,7 +97,7 @@ governance docs were authored for the original sidecar design; the runtime is no
 From the packaged `.vsix`:
 
 ```powershell
-code --install-extension ".\modellane-brainstrom-ts-0.3.3.vsix" --force
+code --install-extension ".\modellane-brainstrom-ts-0.4.0.vsix" --force
 ```
 
 Then **Developer: Reload Window**. (Build the `.vsix` yourself with the [Development](#development) steps.)
@@ -174,6 +174,11 @@ icon next to its name — click it for what to fill in and the field rules; clic
 ModelLane's original local-model settings (`lmstudio.*`, `localModels.*`) are retained — see
 [Relationship to ModelLane](#relationship-to-modellane).
 
+**One place for everything.** All of the above — plus the `lmstudio.*` / `localModels.*` options —
+can be edited inside **BrainStrom: Configure** under **Global settings**, so you rarely need to open
+`settings.json`. **Boolean options render as on/off switches**; the rest are text/number/dropdown
+fields. Changes are written to your VS Code user settings when you click **Save configuration**.
+
 ## Commands
 
 | Command | What it does |
@@ -245,7 +250,7 @@ docs/01-architecture/   CONSTITUTION · ARCHITECTURE · ENGINEERING · DASHBOARD
 | In-process `EngineService` (replaces the RPC sidecar) | ✅ built; direct async calls |
 | TS extension (model branch, controller, sidebar, admin console) | ✅ compiles |
 | CLI connector (Codex/Claude) · multi-debater panel | ✅ ported |
-| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.3.3.vsix`) |
+| Packaging (`.vsix`) | ✅ done (`modellane-brainstrom-ts-0.4.0.vsix`) |
 | Test suite (`node:test`) | ✅ 181 / 181 pass |
 | In-VS-Code runtime acceptance | ⬜ manual (your models + VS Code) |
 

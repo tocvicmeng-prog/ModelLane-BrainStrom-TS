@@ -2,6 +2,55 @@ import * as vscode from 'vscode';
 import { BrainstormConfig, ConnectorRegistry, defaultConfig } from './connectorRegistry';
 import { SecretsStore } from './secrets';
 
+/** A VS Code setting surfaced (and made switchable) inside the configure panel, so every
+ *  adjustable option lives in one place. `type: 'bool'` renders as an on/off switch. */
+interface SettingSpec {
+  key: string;
+  type: 'bool' | 'string' | 'number' | 'enum';
+  label: string;
+  help: string;
+  group: string;
+  options?: string[];
+  min?: number;
+  max?: number;
+  step?: number;
+  placeholder?: string;
+}
+
+/** Every adjustable VS Code setting in the software, centralized into the configure panel. */
+const SETTINGS_SPEC: SettingSpec[] = [
+  { key: 'brainstrom.allowRemote', type: 'bool', group: 'BrainStrom', label: 'Allow remote endpoints',
+    help: 'Allow BrainStrom to reach non-local model endpoints (OpenAI / Anthropic). Off by default; remote still needs an allowlisted host + https.' },
+  { key: 'brainstrom.autoConfirmPlan', type: 'bool', group: 'BrainStrom', label: 'Auto-run (skip plan approval)',
+    help: 'On: decompose and debate in one turn. Off (default): BrainStrom proposes the plan first and waits for you to reply "go" (CONFIRM_PLAN).' },
+  { key: 'lmstudio.baseUrl', type: 'string', group: 'Local model chat', label: 'LM Studio base URL', placeholder: 'http://localhost:1234',
+    help: 'Base URL of your LM Studio server for the ModelLane chat + code actions.' },
+  { key: 'lmstudio.apiMode', type: 'enum', group: 'Local model chat', label: 'API mode', options: ['native', 'openai'],
+    help: 'native = LM Studio /api/v1 endpoints; openai = OpenAI-compatible /v1 endpoints.' },
+  { key: 'lmstudio.allowRemoteBaseUrl', type: 'bool', group: 'Local model chat', label: 'Allow remote LM Studio host',
+    help: 'Allow sending prompts / code to a non-local LM Studio host. Off by default.' },
+  { key: 'lmstudio.model', type: 'string', group: 'Local model chat', label: 'Default model', placeholder: 'auto-detect',
+    help: 'Model id for the ModelLane chat (blank = auto-detect).' },
+  { key: 'lmstudio.maxTokens', type: 'number', group: 'Local model chat', label: 'Max tokens', min: 128, max: 32768,
+    help: 'Maximum tokens per ModelLane chat response (128-32768).' },
+  { key: 'lmstudio.temperature', type: 'number', group: 'Local model chat', label: 'Temperature', min: 0, max: 2, step: 0.1,
+    help: 'Sampling temperature for the ModelLane chat (0-2).' },
+  { key: 'lmstudio.agent.maxIterations', type: 'number', group: 'Local model chat', label: 'Agent max iterations', min: 1, max: 20,
+    help: 'Max tool-use steps the chat Agent mode may take for one request (1-20).' },
+  { key: 'lmstudio.enableInlineCompletion', type: 'bool', group: 'Local model chat', label: 'Inline completion',
+    help: 'Enable inline code completion (sends nearby code to the configured API). Off by default.' },
+  { key: 'lmstudio.enableContextMenu', type: 'bool', group: 'Local model chat', label: 'Editor context menu',
+    help: 'Show the ModelLane right-click code actions (explain / refactor / review / generate tests).' },
+  { key: 'localModels.ollamaBaseUrl', type: 'string', group: 'Local endpoints', label: 'Ollama URL', placeholder: 'http://localhost:11434',
+    help: 'Ollama base URL used by VS Code’s built-in chat model picker.' },
+  { key: 'localModels.vllmBaseUrl', type: 'string', group: 'Local endpoints', label: 'vLLM URL', placeholder: 'http://localhost:8000',
+    help: 'vLLM OpenAI-compatible base URL.' },
+  { key: 'localModels.llamaCppBaseUrl', type: 'string', group: 'Local endpoints', label: 'llama.cpp URL', placeholder: 'http://localhost:8080',
+    help: 'llama.cpp OpenAI-compatible base URL.' },
+  { key: 'localModels.llamafileBaseUrl', type: 'string', group: 'Local endpoints', label: 'Llamafile URL', placeholder: 'http://localhost:8080',
+    help: 'Llamafile OpenAI-compatible base URL.' },
+];
+
 /**
  * adminConsolePanel.ts (N19) — the secure multi-LLM configuration surface.
  *
@@ -48,6 +97,7 @@ export class AdminConsolePanel {
         return;
       }
       await this.registry.setConfig(cfg);
+      await this.applySettings(msg.settings);
       vscode.window.showInformationMessage('BrainStrom configuration saved.');
     } else if (msg.type === 'setKey') {
       const id = String(msg.connectorId || '').trim();
@@ -99,10 +149,45 @@ export class AdminConsolePanel {
     this.panel?.webview.postMessage({ type: 'skillFileLoaded', scope, key, name, content });
   }
 
+  /** Current values of all centralized VS Code settings (injected into the webview). */
+  private gatherSettings(): Record<string, unknown> {
+    const cfg = vscode.workspace.getConfiguration();
+    const out: Record<string, unknown> = {};
+    for (const s of SETTINGS_SPEC) out[s.key] = cfg.get(s.key);
+    return out;
+  }
+
+  /** Write the CHANGED settings from the panel to VS Code user settings. */
+  private async applySettings(settings: any): Promise<void> {
+    if (!settings || typeof settings !== 'object') return;
+    const cfg = vscode.workspace.getConfiguration();
+    const failed: string[] = [];
+    for (const s of SETTINGS_SPEC) {
+      if (!(s.key in settings)) continue;
+      let v: unknown = settings[s.key];
+      if (s.type === 'bool') v = !!v;
+      else if (s.type === 'number') {
+        const n = Number(v);
+        v = (v === '' || v === null || v === undefined || Number.isNaN(n)) ? undefined : n;
+      }
+      if (JSON.stringify(cfg.get(s.key)) === JSON.stringify(v)) continue;   // only write real changes
+      try {
+        await cfg.update(s.key, v, vscode.ConfigurationTarget.Global);
+      } catch {
+        failed.push(s.key);
+      }
+    }
+    if (failed.length) {
+      vscode.window.showWarningMessage('BrainStrom: could not save some settings: ' + failed.join(', '));
+    }
+  }
+
   private html(cfg: BrainstormConfig): string {
     const nonce = makeNonce();
     const csp = `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';`;
     const cfgJson = JSON.stringify(cfg).replace(/</g, '\\u003c');   // safe to embed in <script>
+    const settingsSpecJson = JSON.stringify(SETTINGS_SPEC).replace(/</g, '\\u003c');
+    const settingsValsJson = JSON.stringify(this.gatherSettings()).replace(/</g, '\\u003c');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -151,6 +236,16 @@ export class AdminConsolePanel {
             border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 0.8em; }
     .chip .x { cursor: pointer; font-weight: bold; opacity: 0.8; }
     .chip .x:hover { opacity: 1; }
+    .switch { position: relative; display: inline-block; width: 34px; height: 18px; }
+    .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+    .switch .slider { position: absolute; inset: 0; cursor: pointer; border-radius: 18px;
+            background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); transition: background .15s; }
+    .switch .slider::before { content: ''; position: absolute; width: 12px; height: 12px; left: 2px; top: 2px;
+            border-radius: 50%; background: var(--vscode-descriptionForeground); transition: transform .15s, background .15s; }
+    .switch input:checked + .slider { background: var(--vscode-button-background); border-color: var(--vscode-button-background); }
+    .switch input:checked + .slider::before { transform: translateX(16px); background: var(--vscode-button-foreground); }
+    .switch input:focus-visible + .slider { outline: 1px solid var(--vscode-focusBorder); }
+    .set-input { width: 170px; } select.set-input { width: 178px; }
   </style>
 </head>
 <body>
@@ -177,8 +272,12 @@ export class AdminConsolePanel {
     <span class="fieldcol"><span class="lbl">mode <span class="help" data-help="mode">?</span></span><select id="mode"></select></span>
     <span class="fieldcol"><span class="lbl">max points <span class="help" data-help="maxPoints">?</span></span><input id="maxPoints" class="num" type="number" min="2" max="20" /></span>
     <span class="fieldcol"><span class="lbl">max total tokens <span class="help" data-help="maxTotalTokens">?</span></span><input id="maxTotalTokens" class="num" type="number" min="0" /></span>
-    <span class="fieldcol"><span class="lbl">research <span class="help" data-help="research">?</span></span><input id="researchEnabled" type="checkbox" /></span>
+    <span class="fieldcol"><span class="lbl">research <span class="help" data-help="research">?</span></span><label class="switch"><input id="researchEnabled" type="checkbox" /><span class="slider"></span></label></span>
   </div>
+
+  <h3>Global settings <span class="help" data-help="settingsSection">?</span></h3>
+  <p class="hint">All ModelLane &amp; BrainStrom options in one place — saved to your VS Code user settings on <b>Save</b>. Boolean options are on/off switches.</p>
+  <div id="settings"></div>
 
   <div class="bar">
     <button id="save">Save configuration</button>
@@ -190,6 +289,8 @@ export class AdminConsolePanel {
   <script nonce="${nonce}">
     const vscodeApi = acquireVsCodeApi();
     const CFG = ${cfgJson};
+    const SETTINGS_SPEC = ${settingsSpecJson};
+    const SETTINGS_VALUES = ${settingsValsJson};
     const KINDS = ['openai', 'anthropic', 'openai-compatible', 'cli'];
     const MODES = ['mixed', 'critical', 'heuristic', 'game-theoretic'];
 
@@ -209,6 +310,50 @@ export class AdminConsolePanel {
     }
     function field(labelText, input, helpKey) {
       return el('span', { class: 'fieldcol' }, [el('span', { class: 'lbl' }, [labelText, helpSpan(helpKey)]), input]);
+    }
+
+    // ---- on/off switch + a generic setting field (bool=switch, enum=select, else input) ----
+    function switchControl(checked, cls, id, dataKey) {
+      const input = el('input', { type: 'checkbox' });
+      input.className = 'sw-input' + (cls ? ' ' + cls : '');
+      if (id) input.id = id;
+      if (dataKey) input.setAttribute('data-setkey', dataKey);
+      input.checked = !!checked;
+      return el('label', { class: 'switch' }, [input, el('span', { class: 'slider' }, [])]);
+    }
+    function switchField(labelText, helpKey, checked, dataKey) {
+      return el('span', { class: 'fieldcol' }, [
+        el('span', { class: 'lbl' }, [labelText, helpSpan(helpKey)]),
+        switchControl(checked, '', '', dataKey),
+      ]);
+    }
+    function settingField(s) {
+      const val = SETTINGS_VALUES[s.key];
+      const hk = 'set:' + s.key;
+      if (s.type === 'bool') return switchField(s.label, hk, !!val, s.key);
+      let control;
+      if (s.type === 'enum') {
+        control = select('set-input', s.options || [], val != null ? String(val) : (s.options || [''])[0]);
+      } else {
+        control = el('input', { class: 'set-input', type: s.type === 'number' ? 'number' : 'text',
+          value: (val == null ? '' : String(val)), placeholder: s.placeholder || '' });
+        if (s.min != null) control.setAttribute('min', String(s.min));
+        if (s.max != null) control.setAttribute('max', String(s.max));
+        if (s.step != null) control.setAttribute('step', String(s.step));
+      }
+      control.setAttribute('data-setkey', s.key);
+      return field(s.label, control, hk);
+    }
+    function readSettings() {
+      const out = {};
+      for (const s of SETTINGS_SPEC) {
+        const elx = document.querySelector('[data-setkey="' + s.key + '"]');
+        if (!elx) continue;
+        if (s.type === 'bool') out[s.key] = !!elx.checked;
+        else if (s.type === 'number') { const n = parseFloat(elx.value); out[s.key] = isNaN(n) ? '' : n; }
+        else out[s.key] = elx.value;
+      }
+      return out;
     }
 
     // ---- combo field: a dropdown of common values + an 'Other…' escape to free text ----
@@ -293,7 +438,10 @@ export class AdminConsolePanel {
       maxPoints: { t: 'Max points', b: 'How many debatable knowledge points to decompose the topic into (2–20). More points = deeper coverage but more tokens.' },
       maxTotalTokens: { t: 'Max total tokens', b: 'Optional hard cap on total estimated tokens for the whole session. Blank = no cap. The run stops if the cap is reached.' },
       research: { t: 'Research', b: 'Allow debaters to fetch external sources (Wikipedia / Semantic Scholar / etc.) during the debate.\\nOff by default for privacy — your topic is sent to those services when enabled.' },
+      'c-filetools': { t: 'CLI file tools', b: '(cli only) Allow the CLI to use its file-writing tools. Off by default — the CLI runs single-shot in a bounded temp dir.' },
+      settingsSection: { t: 'Global settings', b: 'Every adjustable ModelLane & BrainStrom option in one place. Changes are written to your VS Code user settings when you Save. Boolean options are on/off switches.' },
     };
+    for (const s of SETTINGS_SPEC) HELP['set:' + s.key] = { t: s.label, b: s.help };
     const helpPop = document.getElementById('help-pop');
     let helpOpen = null;
     function showHelp(key, anchor) {
@@ -328,6 +476,7 @@ export class AdminConsolePanel {
         field('command', el('input', { class: 'c-command base', value: c.command || '', placeholder: 'e.g. claude -p' }), 'c-command'),
         field('prompt', select('c-promptvia', ['stdin', 'arg'], c.promptVia || 'stdin'), 'c-promptvia'),
         field('timeout s', el('input', { class: 'c-timeout num', type: 'number', value: c.timeout || '' }), 'c-timeout'),
+        el('span', { class: 'fieldcol' }, [el('span', { class: 'lbl' }, ['file tools', helpSpan('c-filetools')]), switchControl(c.allowFileTools, 'c-filetools')]),
       ]);
       const toggleCli = () => { cli.style.display = kindSel.value === 'cli' ? 'inline-flex' : 'none'; };
       kindSel.addEventListener('change', toggleCli);
@@ -430,6 +579,19 @@ export class AdminConsolePanel {
     document.getElementById('maxTotalTokens').value = CFG.maxTotalTokens || '';
     document.getElementById('researchEnabled').checked = !!CFG.researchEnabled;
 
+    // ---- render the centralized Global settings (grouped) ----
+    (function renderSettings() {
+      const box = document.getElementById('settings');
+      const order = [];
+      const groups = {};
+      for (const s of SETTINGS_SPEC) { if (!groups[s.group]) { groups[s.group] = []; order.push(s.group); } groups[s.group].push(s); }
+      for (const g of order) {
+        const row = el('div', { class: 'row' }, []);
+        for (const s of groups[g]) row.appendChild(settingField(s));
+        box.appendChild(el('div', { class: 'seat' }, [el('b', {}, [g]), row]));
+      }
+    })();
+
     document.getElementById('addConnector').addEventListener('click', () => connectorsBox.appendChild(connectorRow()));
     document.getElementById('addDebater').addEventListener('click', () => debatersBox.appendChild(debaterRow()));
     document.getElementById('reset').addEventListener('click', () => vscodeApi.postMessage({ type: 'reset' }));
@@ -445,6 +607,7 @@ export class AdminConsolePanel {
           def.promptVia = row.querySelector('.c-promptvia').value;
           const t = parseInt(row.querySelector('.c-timeout').value, 10);
           if (t) def.timeout = t;
+          def.allowFileTools = row.querySelector('.c-filetools').checked;
         }
         return def;
       }).filter(c => c.id);
@@ -484,7 +647,7 @@ export class AdminConsolePanel {
       };
       const mt = parseInt(document.getElementById('maxTotalTokens').value, 10);
       if (mt) cfg.maxTotalTokens = mt;
-      vscodeApi.postMessage({ type: 'save', config: cfg });
+      vscodeApi.postMessage({ type: 'save', config: cfg, settings: readSettings() });
     });
 
     // ---- receive a loaded skill file from the extension (pickSkillFile round-trip) ----
